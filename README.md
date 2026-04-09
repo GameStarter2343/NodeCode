@@ -11,10 +11,10 @@ The project was designed to simplify node exchange, versioning, and migration be
 -  Export node trees to clipboard as JSON
 -  Import node trees from clipboard
 -  Supports all major node systems:
-  - Shader Nodes
-  - Geometry Nodes
-  - Compositor
-  - Texture Nodes
+   - Shader Nodes
+   - Geometry Nodes
+   - Compositor
+   - Texture Nodes
 -  Preserves links between nodes
 -  Keeps layout and visual structure intact
 
