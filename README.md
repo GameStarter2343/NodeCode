@@ -1,12 +1,8 @@
 # Node Code Converter
 
-A Blender add-on that lets you **export and import node trees as JSON**, including node groups, frames, and node settings.
+A Blender add-on that lets you **export and import node trees as JSON**.
 
-Designed for:
-- Sharing node setups
-- Versioning node graphs
-- Copy/paste workflows across projects
-- Procedural pipeline tooling
+The project was designed to simplify node exchange, versioning, and migration between projects, serving as a tool for procedural pipelines. The key goal is to simplify the process of sharing node setups as much as possible.
 
 ---
 
