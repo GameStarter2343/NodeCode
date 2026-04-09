@@ -10,21 +10,21 @@ Designed for:
 
 ---
 
-## ✨ Features
+## Features
 
-- 📋 Export node trees to clipboard as JSON
-- 📥 Import node trees from clipboard
-- 🧩 Supports all major node systems:
+-  Export node trees to clipboard as JSON
+-  Import node trees from clipboard
+-  Supports all major node systems:
   - Shader Nodes
   - Geometry Nodes
   - Compositor
   - Texture Nodes
-- 🔗 Preserves links between nodes
-- 🎨 Keeps layout and visual structure intact
+-  Preserves links between nodes
+-  Keeps layout and visual structure intact
 
 ---
 
-## 📁 Installation
+## Installation
 
 1. Download or clone this repository
 2. Zip the `node_code_converter` folder (if needed)
@@ -36,7 +36,7 @@ Designed for:
 
 ---
 
-## 🧑‍💻 Usage
+## Usage
 
 ### Export nodes
 
@@ -45,7 +45,7 @@ Designed for:
 3. Go to the **NodeCode** tab
 4. Click **Export Nodes**
 
-➡️ JSON is copied to your clipboard
+JSON is copied to your clipboard
 
 ---
 
@@ -55,11 +55,11 @@ Designed for:
 2. Open a Node Editor
 3. Click **Import Nodes**
 
-➡️ Nodes are reconstructed automatically
+Nodes are reconstructed automatically
 
 ---
 
-## 🧠 How it works
+## How it works
 
 The add-on serializes:
 
