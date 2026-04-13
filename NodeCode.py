@@ -1,6 +1,6 @@
 bl_info = {
     "name": "Node Code Converter",
-    "blender": (2, 93, 0),
+    "blender": (4, 3, 0),
     "category": "Node",
 }
 
@@ -16,18 +16,10 @@ GROUP_NODE_TYPES = {
     "TextureNodeGroup",
 }
 
-TREE_TYPE_LABELS = {
-    "ShaderNodeTree": "Shader / World",
-    "GeometryNodeTree": "Geometry Nodes",
-    "CompositorNodeTree": "Compositor",
-    "TextureNodeTree": "Texture",
-}
-
 
 # ------------------------
 # Helpers
 # ------------------------
-
 
 NODE_MODE_PROPERTIES = (
     "operation",
@@ -89,7 +81,6 @@ def _apply_node_mode_properties(node, props):
 
 
 def _export_color_ramp(node):
-    """Return a serialisable dict for node.color_ramp, or None."""
     cr = getattr(node, "color_ramp", None)
     if cr is None:
         return None
@@ -104,14 +95,12 @@ def _export_color_ramp(node):
 
 
 def _apply_color_ramp(node, cr_data):
-    """Rebuild node.color_ramp from a previously exported dict."""
     if not cr_data:
         return
     cr = getattr(node, "color_ramp", None)
     if cr is None:
         return
 
-    # Ramp-level settings
     try:
         cr.color_mode = cr_data.get("color_mode", cr.color_mode)
         cr.interpolation = cr_data.get("interpolation", cr.interpolation)
@@ -123,16 +112,9 @@ def _apply_color_ramp(node, cr_data):
     if not elements_data:
         return
 
-    # A fresh ColorRamp always contains exactly 2 elements and the API
-    # won't let you go below 2.  Strategy:
-    #   1. Add all extra stops we need beyond the initial 2.
-    #   2. Set every stop's position + color back-to-front (so repositioning
-    #      a stop never pushes a neighbour past it and triggers a reorder).
-    #   3. Remove any leftover stops from the tail.
-
     target_count = len(elements_data)
     while len(cr.elements) < target_count:
-        cr.elements.new(0.0)  # position will be overwritten below
+        cr.elements.new(0.0)
 
     for i in range(target_count - 1, -1, -1):
         ed = elements_data[i]
@@ -146,13 +128,49 @@ def _apply_color_ramp(node, cr_data):
         except Exception:
             pass
 
-    # Remove surplus elements (only needed if saved ramp somehow had <2 stops).
     while len(cr.elements) > target_count:
         cr.elements.remove(cr.elements[-1])
 
 
 # ------------------------
-# Context helpers
+# Socket value helpers (now with list → tuple conversion)
+# ------------------------
+
+
+def _export_socket_values(sockets):
+    result = {}
+    for i, sock in enumerate(sockets):
+        if not hasattr(sock, "default_value"):
+            continue
+        try:
+            val = sock.default_value
+            key = f"{i}:{sock.name}"  # index prevents duplicate-name collisions
+            if hasattr(val, "__len__"):
+                result[key] = list(val)
+            else:
+                result[key] = val
+        except Exception:
+            pass
+    return result
+
+
+def _apply_socket_values(sockets, values):
+    for i, sock in enumerate(sockets):
+        # Prefer the new indexed key; fall back to bare name for old JSON
+        key = f"{i}:{sock.name}"
+        value = values.get(key, values.get(sock.name))
+        if value is None:
+            continue
+        try:
+            if isinstance(value, list):
+                value = tuple(value)
+            sock.default_value = value
+        except Exception:
+            pass
+
+
+# ------------------------
+# Context helpers (unchanged)
 # ------------------------
 
 
@@ -247,7 +265,7 @@ def ensure_import_node_tree(context, tree_type_hint):
 
 
 # ------------------------
-# Export
+# Export / Import (core logic)
 # ------------------------
 
 
@@ -264,19 +282,18 @@ def _export_single_tree(node_tree):
             "hide": node.hide,
             "mute": node.mute,
             "color": list(node.color) if node.use_custom_color else None,
-            "inputs": {},
+            "inputs": _export_socket_values(node.inputs),
+            "outputs": _export_socket_values(node.outputs),
             "parent": node.parent.name if node.parent else None,
             "node_props": _get_node_mode_properties(node),
         }
 
-        # Frame-specific data
         if node.bl_idname == "NodeFrame":
             node_data["frame"] = {
                 "label_size": getattr(node, "label_size", None),
                 "shrink": getattr(node, "shrink", False),
             }
 
-        # Color ramp (ShaderNodeValToRGB, ColorRamp in GN, etc.)
         cr_data = _export_color_ramp(node)
         if cr_data is not None:
             node_data["color_ramp"] = cr_data
@@ -286,23 +303,19 @@ def _export_single_tree(node_tree):
             if grp:
                 node_data["node_group_name"] = grp.name
 
-        for sock in node.inputs:
-            if not hasattr(sock, "default_value"):
-                continue
-            try:
-                node_data["inputs"][sock.name] = list(sock.default_value)
-            except TypeError:
-                node_data["inputs"][sock.name] = sock.default_value
-
         data["nodes"].append(node_data)
 
     for link in node_tree.links:
         data["links"].append(
             {
                 "from_node": link.from_node.name,
-                "from_socket": link.from_socket.name,
+                "from_socket_index": list(link.from_node.outputs).index(
+                    link.from_socket
+                ),
                 "to_node": link.to_node.name,
-                "to_socket": link.to_socket.name,
+                "to_socket_index": list(link.to_node.inputs).index(link.to_socket),
+                "from_socket_name": link.from_socket.name,
+                "to_socket_name": link.to_socket.name,
             }
         )
 
@@ -323,7 +336,6 @@ def _collect_groups(node_tree, groups_out, visited):
 def export_node_tree_to_json(node_tree):
     groups = {}
     _collect_groups(node_tree, groups, set())
-
     result = {
         "tree_type": node_tree.bl_idname,
         "main_tree": _export_single_tree(node_tree),
@@ -332,18 +344,11 @@ def export_node_tree_to_json(node_tree):
     return json.dumps(result, indent=2)
 
 
-# ------------------------
-# Import
-# ------------------------
-
-
 def _import_single_tree(node_tree, tree_data, groups_map):
     node_tree.nodes.clear()
     created = {}
 
-    # Pass 1 – create every node and apply the properties that govern its
-    # socket layout (operation, blend_type, data_type, …) BEFORE touching
-    # inputs, so the correct sockets are present when we assign values.
+    # Pass 1 – create + configure nodes
     for nd in tree_data.get("nodes", []):
         try:
             node = node_tree.nodes.new(nd["type"])
@@ -361,7 +366,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             node.use_custom_color = True
             node.color = colour
 
-        # Frame-specific settings (label_size, shrink).
         if node.bl_idname == "NodeFrame":
             frame_data = nd.get("frame", {})
             if frame_data:
@@ -372,7 +376,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
                 except Exception:
                     pass
 
-        # Resolve node group reference.
         grp_name = nd.get("node_group_name")
         if grp_name and grp_name in groups_map:
             try:
@@ -380,36 +383,24 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             except Exception:
                 pass
 
-        # *** Apply mode / operation props FIRST so sockets are correct. ***
         _apply_node_mode_properties(node, nd.get("node_props", {}))
-
-        # Rebuild color ramp stops before assigning regular inputs.
         _apply_color_ramp(node, nd.get("color_ramp"))
-
-        # Now assign input default values (sockets are in their final state).
-        for inp_name, value in nd.get("inputs", {}).items():
-            if inp_name not in node.inputs:
-                continue
-            try:
-                node.inputs[inp_name].default_value = value
-            except Exception:
-                pass
+        _apply_socket_values(node.inputs, nd.get("inputs", {}))
+        _apply_socket_values(node.outputs, nd.get("outputs", {}))
 
         created[node.name] = node
 
-    # Pass 2 – position frames BEFORE parenting children to them.
+    # Pass 2-4 – frames & positioning (unchanged)
     for nd in tree_data.get("nodes", []):
         if nd.get("type") != "NodeFrame":
             continue
         node = created.get(nd.get("name"))
-        if not node:
-            continue
-        try:
-            node.location = nd.get("location", [0, 0])
-        except Exception:
-            pass
+        if node:
+            try:
+                node.location = nd.get("location", [0, 0])
+            except Exception:
+                pass
 
-    # Pass 3 – parent child nodes to their frames.
     for nd in tree_data.get("nodes", []):
         parent_name = nd.get("parent")
         if not parent_name:
@@ -422,25 +413,48 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             except Exception:
                 pass
 
-    # Pass 4 – position every non-frame node.
     for nd in tree_data.get("nodes", []):
         if nd.get("type") == "NodeFrame":
             continue
         node = created.get(nd.get("name"))
-        if not node:
-            continue
-        try:
-            node.location = nd.get("location", [0, 0])
-        except Exception:
-            pass
+        if node:
+            try:
+                node.location = nd.get("location", [0, 0])
+            except Exception:
+                pass
 
-    # Links
+    # Links – supports ALL formats you have used so far
     for lnk in tree_data.get("links", []):
         try:
-            node_tree.links.new(
-                created[lnk["from_node"]].outputs[lnk["from_socket"]],
-                created[lnk["to_node"]].inputs[lnk["to_socket"]],
-            )
+            from_node = created.get(lnk["from_node"])
+            to_node = created.get(lnk["to_node"])
+            if not from_node or not to_node:
+                continue
+
+            # 1. Index (fastest, from normal export)
+            from_idx = lnk.get("from_socket_index")
+            to_idx = lnk.get("to_socket_index")
+            if from_idx is not None and to_idx is not None:
+                if from_idx < len(from_node.outputs) and to_idx < len(to_node.inputs):
+                    node_tree.links.new(
+                        from_node.outputs[from_idx], to_node.inputs[to_idx]
+                    )
+                    continue
+
+            # 2. Your current JSON format (from_socket / to_socket)
+            if "from_socket" in lnk and "to_socket" in lnk:
+                from_socket = from_node.outputs.get(lnk["from_socket"])
+                to_socket = to_node.inputs.get(lnk["to_socket"])
+                if from_socket and to_socket:
+                    node_tree.links.new(from_socket, to_socket)
+                    continue
+
+            # 3. Old fallback
+            from_socket = from_node.outputs.get(lnk.get("from_socket_name"))
+            to_socket = to_node.inputs.get(lnk.get("to_socket_name"))
+            if from_socket and to_socket:
+                node_tree.links.new(from_socket, to_socket)
+
         except Exception:
             pass
 
@@ -472,7 +486,7 @@ def import_node_tree_from_json(node_tree, json_data):
 
 
 # ------------------------
-# Operators
+# Operators / UI / Register
 # ------------------------
 
 
@@ -488,8 +502,9 @@ class NODECODE_OT_export(bpy.types.Operator):
 
         json_data = export_node_tree_to_json(tree)
         context.window_manager.clipboard = json_data
-
-        self.report({"INFO"}, "Exported node tree")
+        self.report(
+            {"INFO"}, "Node tree exported to clipboard (all preset values saved)"
+        )
         return {"FINISHED"}
 
 
@@ -499,7 +514,6 @@ class NODECODE_OT_import_buffer(bpy.types.Operator):
 
     def execute(self, context):
         raw = context.window_manager.clipboard
-
         try:
             data = json.loads(raw)
         except Exception:
@@ -516,14 +530,8 @@ class NODECODE_OT_import_buffer(bpy.types.Operator):
                 return {"CANCELLED"}
 
         import_node_tree_from_json(tree, raw)
-
-        self.report({"INFO"}, "Imported node tree")
+        self.report({"INFO"}, "Node tree imported successfully")
         return {"FINISHED"}
-
-
-# ------------------------
-# UI Panel
-# ------------------------
 
 
 class NODECODE_PT_panel(bpy.types.Panel):
@@ -535,14 +543,9 @@ class NODECODE_PT_panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-
         layout.operator("nodecode.export", icon="COPYDOWN")
         layout.operator("nodecode.import_buffer", icon="PASTEDOWN")
 
-
-# ------------------------
-# Register
-# ------------------------
 
 classes = (
     NODECODE_OT_export,
