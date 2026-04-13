@@ -84,6 +84,74 @@ def _apply_node_mode_properties(node, props):
 
 
 # ------------------------
+# Color ramp helpers
+# ------------------------
+
+
+def _export_color_ramp(node):
+    """Return a serialisable dict for node.color_ramp, or None."""
+    cr = getattr(node, "color_ramp", None)
+    if cr is None:
+        return None
+    return {
+        "color_mode": cr.color_mode,
+        "interpolation": cr.interpolation,
+        "hue_interpolation": cr.hue_interpolation,
+        "elements": [
+            {"position": el.position, "color": list(el.color)} for el in cr.elements
+        ],
+    }
+
+
+def _apply_color_ramp(node, cr_data):
+    """Rebuild node.color_ramp from a previously exported dict."""
+    if not cr_data:
+        return
+    cr = getattr(node, "color_ramp", None)
+    if cr is None:
+        return
+
+    # Ramp-level settings
+    try:
+        cr.color_mode = cr_data.get("color_mode", cr.color_mode)
+        cr.interpolation = cr_data.get("interpolation", cr.interpolation)
+        cr.hue_interpolation = cr_data.get("hue_interpolation", cr.hue_interpolation)
+    except Exception:
+        pass
+
+    elements_data = cr_data.get("elements", [])
+    if not elements_data:
+        return
+
+    # A fresh ColorRamp always contains exactly 2 elements and the API
+    # won't let you go below 2.  Strategy:
+    #   1. Add all extra stops we need beyond the initial 2.
+    #   2. Set every stop's position + color back-to-front (so repositioning
+    #      a stop never pushes a neighbour past it and triggers a reorder).
+    #   3. Remove any leftover stops from the tail.
+
+    target_count = len(elements_data)
+    while len(cr.elements) < target_count:
+        cr.elements.new(0.0)  # position will be overwritten below
+
+    for i in range(target_count - 1, -1, -1):
+        ed = elements_data[i]
+        el = cr.elements[i]
+        try:
+            el.position = ed["position"]
+        except Exception:
+            pass
+        try:
+            el.color = ed["color"]
+        except Exception:
+            pass
+
+    # Remove surplus elements (only needed if saved ramp somehow had <2 stops).
+    while len(cr.elements) > target_count:
+        cr.elements.remove(cr.elements[-1])
+
+
+# ------------------------
 # Context helpers
 # ------------------------
 
@@ -208,6 +276,11 @@ def _export_single_tree(node_tree):
                 "shrink": getattr(node, "shrink", False),
             }
 
+        # Color ramp (ShaderNodeValToRGB, ColorRamp in GN, etc.)
+        cr_data = _export_color_ramp(node)
+        if cr_data is not None:
+            node_data["color_ramp"] = cr_data
+
         if node.bl_idname in GROUP_NODE_TYPES:
             grp = getattr(node, "node_tree", None)
             if grp:
@@ -310,6 +383,9 @@ def _import_single_tree(node_tree, tree_data, groups_map):
         # *** Apply mode / operation props FIRST so sockets are correct. ***
         _apply_node_mode_properties(node, nd.get("node_props", {}))
 
+        # Rebuild color ramp stops before assigning regular inputs.
+        _apply_color_ramp(node, nd.get("color_ramp"))
+
         # Now assign input default values (sockets are in their final state).
         for inp_name, value in nd.get("inputs", {}).items():
             if inp_name not in node.inputs:
@@ -322,8 +398,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
         created[node.name] = node
 
     # Pass 2 – position frames BEFORE parenting children to them.
-    # A frame's location is absolute; it must be placed correctly so that
-    # child relative-coords land in the right world position after parenting.
     for nd in tree_data.get("nodes", []):
         if nd.get("type") != "NodeFrame":
             continue
@@ -336,7 +410,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             pass
 
     # Pass 3 – parent child nodes to their frames.
-    # After this, node.location is interpreted relative to the parent frame.
     for nd in tree_data.get("nodes", []):
         parent_name = nd.get("parent")
         if not parent_name:
@@ -350,9 +423,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
                 pass
 
     # Pass 4 – position every non-frame node.
-    # For parented nodes the stored location is already frame-relative
-    # (that is how Blender reports it at export time), so assigning it after
-    # parenting gives the correct world position.
     for nd in tree_data.get("nodes", []):
         if nd.get("type") == "NodeFrame":
             continue
