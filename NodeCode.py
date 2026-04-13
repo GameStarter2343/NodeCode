@@ -1,6 +1,10 @@
 bl_info = {
-    "name": "Node Code Converter",
-    "blender": (4, 3, 0),
+    "name": "NodeCode Converter",
+    "author": "GameStarter2343",
+    "version": (0, 0, 1),
+    "blender": (2, 93, 0),
+    "location": "Node Editor > SideBar > NodeCode",
+    "description": "A tool designed to export/import complex node groups with ease",
     "category": "Node",
 }
 
@@ -8,7 +12,10 @@ import json
 
 import bpy
 
-# Constants
+# ------------------------
+# Helpers
+# ------------------------
+
 GROUP_NODE_TYPES = {
     "ShaderNodeGroup",
     "GeometryNodeGroup",
@@ -16,10 +23,6 @@ GROUP_NODE_TYPES = {
     "TextureNodeGroup",
 }
 
-
-# ------------------------
-# Helpers
-# ------------------------
 
 NODE_MODE_PROPERTIES = (
     "operation",
@@ -144,7 +147,7 @@ def _export_socket_values(sockets):
             continue
         try:
             val = sock.default_value
-            key = f"{i}:{sock.name}"  # index prevents duplicate-name collisions
+            key = f"{i}:{sock.name}"
             if hasattr(val, "__len__"):
                 result[key] = list(val)
             else:
@@ -348,7 +351,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
     node_tree.nodes.clear()
     created = {}
 
-    # Pass 1 – create + configure nodes
     for nd in tree_data.get("nodes", []):
         try:
             node = node_tree.nodes.new(nd["type"])
@@ -390,7 +392,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
 
         created[node.name] = node
 
-    # Pass 2-4 – frames & positioning (unchanged)
     for nd in tree_data.get("nodes", []):
         if nd.get("type") != "NodeFrame":
             continue
@@ -423,7 +424,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             except Exception:
                 pass
 
-    # Links – supports ALL formats you have used so far
     for lnk in tree_data.get("links", []):
         try:
             from_node = created.get(lnk["from_node"])
@@ -431,7 +431,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             if not from_node or not to_node:
                 continue
 
-            # 1. Index (fastest, from normal export)
             from_idx = lnk.get("from_socket_index")
             to_idx = lnk.get("to_socket_index")
             if from_idx is not None and to_idx is not None:
@@ -441,7 +440,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
                     )
                     continue
 
-            # 2. Your current JSON format (from_socket / to_socket)
             if "from_socket" in lnk and "to_socket" in lnk:
                 from_socket = from_node.outputs.get(lnk["from_socket"])
                 to_socket = to_node.inputs.get(lnk["to_socket"])
@@ -449,7 +447,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
                     node_tree.links.new(from_socket, to_socket)
                     continue
 
-            # 3. Old fallback
             from_socket = from_node.outputs.get(lnk.get("from_socket_name"))
             to_socket = to_node.inputs.get(lnk.get("to_socket_name"))
             if from_socket and to_socket:

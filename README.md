@@ -27,7 +27,7 @@ The project was designed to simplify node exchange, versioning, and migration be
 3. In Blender:
    - Go to **Edit → Preferences → Add-ons**
    - Click **Install**
-   - Select the `.zip` file or folder
+   - Select the `NodeCode.py` file
 4. Enable **Node Code Converter** extention
 
 ---
