@@ -25,18 +25,37 @@ TREE_TYPE_LABELS = {
 
 
 # ------------------------
-# Helpers (NEW)
+# Helpers
 # ------------------------
+
+
+NODE_MODE_PROPERTIES = (
+    "operation",
+    "blend_type",
+    "blend_mode",
+    "mode",
+    "data_type",
+    "interpolation_type",
+    "vector_type",
+    "color_space",
+    "space",
+    "distribution",
+    "falloff_type",
+    "clamp",
+    "clamp_factor",
+    "use_clamp",
+)
 
 
 def _get_node_mode_properties(node):
     props = {}
-    for attr in ("operation", "blend_type"):
-        if hasattr(node, attr):
-            try:
-                props[attr] = getattr(node, attr)
-            except Exception:
-                pass
+    for attr in NODE_MODE_PROPERTIES:
+        if not hasattr(node, attr):
+            continue
+        try:
+            props[attr] = getattr(node, attr)
+        except Exception:
+            pass
     return props
 
 
@@ -272,7 +291,10 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             except Exception:
                 pass
 
-        # Inputs
+        # *** Apply mode / operation props FIRST so sockets are correct. ***
+        _apply_node_mode_properties(node, nd.get("node_props", {}))
+
+        # Now assign input default values (sockets are in their final state).
         for inp_name, value in nd.get("inputs", {}).items():
             if inp_name not in node.inputs:
                 continue
@@ -281,25 +303,50 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             except Exception:
                 pass
 
-        # Mode properties
-        _apply_node_mode_properties(node, nd.get("node_props", {}))
-
         created[node.name] = node
 
-    # Second pass: parenting (frames)
+    # Pass 2 – position frames BEFORE parenting children to them.
+    # A frame's location is absolute; it must be placed correctly so that
+    # child relative-coords land in the right world position after parenting.
+    for nd in tree_data.get("nodes", []):
+        if nd.get("type") != "NodeFrame":
+            continue
+        node = created.get(nd.get("name"))
+        if not node:
+            continue
+        try:
+            node.location = nd.get("location", [0, 0])
+        except Exception:
+            pass
+
+    # Pass 3 – parent child nodes to their frames.
+    # After this, node.location is interpreted relative to the parent frame.
     for nd in tree_data.get("nodes", []):
         parent_name = nd.get("parent")
         if not parent_name:
             continue
-
         node = created.get(nd.get("name"))
         parent = created.get(parent_name)
-
         if node and parent:
             try:
                 node.parent = parent
             except Exception:
                 pass
+
+    # Pass 4 – position every non-frame node.
+    # For parented nodes the stored location is already frame-relative
+    # (that is how Blender reports it at export time), so assigning it after
+    # parenting gives the correct world position.
+    for nd in tree_data.get("nodes", []):
+        if nd.get("type") == "NodeFrame":
+            continue
+        node = created.get(nd.get("name"))
+        if not node:
+            continue
+        try:
+            node.location = nd.get("location", [0, 0])
+        except Exception:
+            pass
 
     # Links
     for lnk in tree_data.get("links", []):
