@@ -1,7 +1,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (0, 0, 1),
+    "version": (0, 1, 0),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -55,6 +55,13 @@ NODE_MODE_PROPERTIES = (
     "direction_type",
     "pivot_axis",
 )
+
+
+def _is_default_socket(sock, value):
+    try:
+        return sock.default_value == sock.bl_rna.properties["default_value"].default
+    except Exception:
+        return False
 
 
 def _get_node_mode_properties(node):
@@ -147,6 +154,8 @@ def _export_socket_values(sockets):
             continue
         try:
             val = sock.default_value
+            if _is_default_socket(sock, val):
+                continue
             key = f"{i}:{sock.name}"
             if hasattr(val, "__len__"):
                 result[key] = list(val)
@@ -274,9 +283,11 @@ def ensure_import_node_tree(context, tree_type_hint):
 
 def _export_single_tree(node_tree):
     data = {"nodes": [], "links": []}
+    node_index = {node: i for i, node in enumerate(node_tree.nodes)}
 
     for node in node_tree.nodes:
         node_data = {
+            "id": node_index[node],
             "name": node.name,
             "label": node.label,
             "type": node.bl_idname,
@@ -287,7 +298,7 @@ def _export_single_tree(node_tree):
             "color": list(node.color) if node.use_custom_color else None,
             "inputs": _export_socket_values(node.inputs),
             "outputs": _export_socket_values(node.outputs),
-            "parent": node.parent.name if node.parent else None,
+            "parent": node_index[node.parent] if node.parent else None,
             "node_props": _get_node_mode_properties(node),
         }
 
@@ -311,14 +322,12 @@ def _export_single_tree(node_tree):
     for link in node_tree.links:
         data["links"].append(
             {
-                "from_node": link.from_node.name,
+                "from_node": node_index[link.from_node],
                 "from_socket_index": list(link.from_node.outputs).index(
                     link.from_socket
                 ),
-                "to_node": link.to_node.name,
+                "to_node": node_index[link.to_node],
                 "to_socket_index": list(link.to_node.inputs).index(link.to_socket),
-                "from_socket_name": link.from_socket.name,
-                "to_socket_name": link.to_socket.name,
             }
         )
 
@@ -344,7 +353,7 @@ def export_node_tree_to_json(node_tree):
         "main_tree": _export_single_tree(node_tree),
         "node_groups": groups,
     }
-    return json.dumps(result, indent=2)
+    return json.dumps(result, separators=(",", ":"))
 
 
 def _import_single_tree(node_tree, tree_data, groups_map):
@@ -390,12 +399,14 @@ def _import_single_tree(node_tree, tree_data, groups_map):
         _apply_socket_values(node.inputs, nd.get("inputs", {}))
         _apply_socket_values(node.outputs, nd.get("outputs", {}))
 
-        created[node.name] = node
+        node_id = nd.get("id")
+        if node_id is not None:
+            created[node_id] = node
 
     for nd in tree_data.get("nodes", []):
         if nd.get("type") != "NodeFrame":
             continue
-        node = created.get(nd.get("name"))
+        node = created.get(nd.get("id"))
         if node:
             try:
                 node.location = nd.get("location", [0, 0])
@@ -403,11 +414,11 @@ def _import_single_tree(node_tree, tree_data, groups_map):
                 pass
 
     for nd in tree_data.get("nodes", []):
-        parent_name = nd.get("parent")
-        if not parent_name:
+        parent_id = nd.get("parent")
+        if not parent_id:
             continue
-        node = created.get(nd.get("name"))
-        parent = created.get(parent_name)
+        node = created.get(nd.get("id"))
+        parent = created.get(parent_id)
         if node and parent:
             try:
                 node.parent = parent
@@ -417,7 +428,7 @@ def _import_single_tree(node_tree, tree_data, groups_map):
     for nd in tree_data.get("nodes", []):
         if nd.get("type") == "NodeFrame":
             continue
-        node = created.get(nd.get("name"))
+        node = created.get(nd.get("id"))
         if node:
             try:
                 node.location = nd.get("location", [0, 0])
