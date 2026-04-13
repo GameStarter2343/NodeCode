@@ -253,7 +253,9 @@ def _import_single_tree(node_tree, tree_data, groups_map):
     node_tree.nodes.clear()
     created = {}
 
-    # First pass: create nodes
+    # Pass 1 – create every node and apply the properties that govern its
+    # socket layout (operation, blend_type, data_type, …) BEFORE touching
+    # inputs, so the correct sockets are present when we assign values.
     for nd in tree_data.get("nodes", []):
         try:
             node = node_tree.nodes.new(nd["type"])
@@ -262,7 +264,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
 
         node.name = nd.get("name", node.name)
         node.label = nd.get("label", "")
-        node.location = nd.get("location", [0, 0])
         node.width = nd.get("width", node.width)
         node.hide = nd.get("hide", False)
         node.mute = nd.get("mute", False)
@@ -272,7 +273,7 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             node.use_custom_color = True
             node.color = colour
 
-        # Frame settings
+        # Frame-specific settings (label_size, shrink).
         if node.bl_idname == "NodeFrame":
             frame_data = nd.get("frame", {})
             if frame_data:
@@ -283,7 +284,7 @@ def _import_single_tree(node_tree, tree_data, groups_map):
                 except Exception:
                     pass
 
-        # Node groups
+        # Resolve node group reference.
         grp_name = nd.get("node_group_name")
         if grp_name and grp_name in groups_map:
             try:
