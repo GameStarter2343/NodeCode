@@ -322,12 +322,10 @@ def _export_single_tree(node_tree):
     for link in node_tree.links:
         data["links"].append(
             {
-                "from_node": node_index[link.from_node],
-                "from_socket_index": list(link.from_node.outputs).index(
-                    link.from_socket
-                ),
-                "to_node": node_index[link.to_node],
-                "to_socket_index": list(link.to_node.inputs).index(link.to_socket),
+                "f": node_index[link.from_node],
+                "fs": list(link.from_node.outputs).index(link.from_socket),
+                "t": node_index[link.to_node],
+                "ts": list(link.to_node.inputs).index(link.to_socket),
             }
         )
 
@@ -349,6 +347,7 @@ def export_node_tree_to_json(node_tree):
     groups = {}
     _collect_groups(node_tree, groups, set())
     result = {
+        "version": bl_info["version"],
         "tree_type": node_tree.bl_idname,
         "main_tree": _export_single_tree(node_tree),
         "node_groups": groups,
@@ -437,13 +436,13 @@ def _import_single_tree(node_tree, tree_data, groups_map):
 
     for lnk in tree_data.get("links", []):
         try:
-            from_node = created.get(lnk["from_node"])
-            to_node = created.get(lnk["to_node"])
+            from_node = created.get(lnk["f"])
+            to_node = created.get(lnk["t"])
             if not from_node or not to_node:
                 continue
 
-            from_idx = lnk.get("from_socket_index")
-            to_idx = lnk.get("to_socket_index")
+            from_idx = lnk.get("fs")
+            to_idx = lnk.get("ts")
             if from_idx is not None and to_idx is not None:
                 if from_idx < len(from_node.outputs) and to_idx < len(to_node.inputs):
                     node_tree.links.new(
