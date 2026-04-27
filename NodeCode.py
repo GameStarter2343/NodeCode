@@ -11,10 +11,11 @@ bl_info = {
 import json
 
 import bpy
+import mathutils
 
-# ------------------------
-# Helpers
-# ------------------------
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
 GROUP_NODE_TYPES = {
     "ShaderNodeGroup",
@@ -23,71 +24,100 @@ GROUP_NODE_TYPES = {
     "TextureNodeGroup",
 }
 
-
-NODE_MODE_PROPERTIES = (
-    "operation",
-    "blend_type",
-    "blend_mode",
-    "mode",
-    "data_type",
-    "interpolation_type",
-    "vector_type",
-    "color_space",
-    "space",
-    "mapping",
-    "noise_dimensions",
-    "noise_type",
-    "distance_metric",
-    "voronoi_feature",
-    "feature",
-    "musgrave_type",
-    "wave_type",
-    "wave_profile",
-    "bands_direction",
-    "rings_direction",
-    "gradient_type",
-    "distribution",
-    "falloff_type",
-    "clamp",
-    "clamp_factor",
-    "use_clamp",
-    "component",
-    "direction_type",
-    "pivot_axis",
+# Properties handled explicitly during export/import; excluded from the
+# generic RNA round-trip to avoid double-application or ordering conflicts.
+_NODE_EXPLICIT_PROPS = frozenset(
+    {
+        "name",
+        "label",
+        "location",
+        "width",
+        "height",
+        "hide",
+        "mute",
+        "color",
+        "use_custom_color",
+        "parent",
+        "node_tree",
+    }
 )
 
-
-def _is_default_socket(sock, value):
-    try:
-        return sock.default_value == sock.bl_rna.properties["default_value"].default
-    except Exception:
-        return False
+_SOCKET_EXPLICIT_PROPS = frozenset({"default_value"})
 
 
-def _get_node_mode_properties(node):
+# ---------------------------------------------------------------------------
+# Generic RNA helpers
+# ---------------------------------------------------------------------------
+
+
+def _serialize_value(value):
+    """Recursively convert a Blender RNA value to a JSON-safe type."""
+    if isinstance(value, (int, float, str, bool)):
+        return value
+
+    if isinstance(
+        value,
+        (mathutils.Vector, mathutils.Color, mathutils.Euler, mathutils.Quaternion),
+    ):
+        return list(value)
+
+    # Catch-all for array-like objects (e.g. bpy_prop_array).
+    if hasattr(value, "__len__") and not isinstance(value, str):
+        try:
+            return [_serialize_value(v) for v in value]
+        except Exception:
+            pass
+
+    # ID datablocks (Image, NodeTree, …) – store name + type for reference.
+    if isinstance(value, bpy.types.ID):
+        return {"__id__": value.name, "__type__": value.__class__.__name__}
+
+    return str(value)
+
+
+def _serialize_rna_properties(obj, skip=frozenset()):
+    """Return a dict of all writable RNA properties on *obj*, skipping *skip*."""
     props = {}
-    for attr in NODE_MODE_PROPERTIES:
-        if not hasattr(node, attr):
+    for prop in obj.bl_rna.properties:
+        identifier = prop.identifier
+        if identifier in {"rna_type"} or identifier in skip:
+            continue
+        if prop.is_readonly:
             continue
         try:
-            props[attr] = getattr(node, attr)
+            props[identifier] = _serialize_value(getattr(obj, identifier))
         except Exception:
             pass
     return props
 
 
-def _apply_node_mode_properties(node, props):
-    for attr, value in props.items():
-        if hasattr(node, attr):
-            try:
-                setattr(node, attr, value)
-            except Exception:
-                pass
+def _apply_rna_properties(obj, data, skip=frozenset()):
+    """Apply a previously serialised RNA dict back to *obj*.
+
+    Lists are tried first as-is; if that fails they are converted to tuples,
+    which is required by many Blender colour / vector RNA properties.
+    """
+    for key, value in data.items():
+        if key in skip or not hasattr(obj, key):
+            continue
+        # Skip ID-datablock placeholders – they cannot be resolved generically.
+        if isinstance(value, dict) and "__id__" in value:
+            continue
+        try:
+            setattr(obj, key, value)
+        except TypeError:
+            if isinstance(value, list):
+                try:
+                    setattr(obj, key, tuple(value))
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
 
-# ------------------------
-# Color ramp helpers
-# ------------------------
+# ---------------------------------------------------------------------------
+# Colour-ramp helpers
+# ---------------------------------------------------------------------------
 
 
 def _export_color_ramp(node):
@@ -142,48 +172,54 @@ def _apply_color_ramp(node, cr_data):
         cr.elements.remove(cr.elements[-1])
 
 
-# ------------------------
-# Socket value helpers (now with list → tuple conversion)
-# ------------------------
+# ---------------------------------------------------------------------------
+# Socket helpers
+# ---------------------------------------------------------------------------
 
 
-def _export_socket_values(sockets):
-    result = {}
-    for i, sock in enumerate(sockets):
-        if not hasattr(sock, "default_value"):
-            continue
-        try:
-            val = sock.default_value
-            if _is_default_socket(sock, val):
-                continue
-            key = f"{i}:{sock.name}"
-            if hasattr(val, "__len__"):
-                result[key] = list(val)
-            else:
-                result[key] = val
-        except Exception:
-            pass
+def _export_sockets_full(sockets):
+    """Serialise all sockets including their default values.
+
+    ``default_value`` is stored under its own top-level key and excluded from
+    the generic RNA dict to prevent double-application on import.
+    """
+    result = []
+    for sock in sockets:
+        sock_data = {
+            "name": sock.name,
+            "type": sock.bl_idname,
+            "rna": _serialize_rna_properties(sock, skip=_SOCKET_EXPLICIT_PROPS),
+        }
+        if hasattr(sock, "default_value"):
+            try:
+                sock_data["default_value"] = _serialize_value(sock.default_value)
+            except Exception:
+                pass
+        result.append(sock_data)
     return result
 
 
-def _apply_socket_values(sockets, values):
-    for i, sock in enumerate(sockets):
-        # Prefer the new indexed key; fall back to bare name for old JSON
-        key = f"{i}:{sock.name}"
-        value = values.get(key, values.get(sock.name))
-        if value is None:
-            continue
-        try:
-            if isinstance(value, list):
-                value = tuple(value)
-            sock.default_value = value
-        except Exception:
-            pass
+def _apply_sockets_full(sockets, data):
+    for sock, sock_data in zip(sockets, data):
+        _apply_rna_properties(sock, sock_data.get("rna", {}))
+
+        if "default_value" in sock_data:
+            value = sock_data["default_value"]
+            try:
+                sock.default_value = value
+            except TypeError:
+                if isinstance(value, list):
+                    try:
+                        sock.default_value = tuple(value)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
 
-# ------------------------
-# Context helpers (unchanged)
-# ------------------------
+# ---------------------------------------------------------------------------
+# Context helpers
+# ---------------------------------------------------------------------------
 
 
 def get_active_node_tree(context):
@@ -208,11 +244,9 @@ def get_active_node_tree(context):
         obj = context.object
         if not obj:
             return None, "No active object"
-
         mat = obj.active_material
         if not mat:
             return None, "No active material on object"
-
         mat.use_nodes = True
         return mat.node_tree, None
 
@@ -247,12 +281,10 @@ def ensure_import_node_tree(context, tree_type_hint):
         obj = context.object
         if not obj:
             return None, "No active object to import material onto"
-
         mat = obj.active_material
         if not mat:
             mat = bpy.data.materials.new(name="Imported Material")
             obj.data.materials.append(mat)
-
         mat.use_nodes = True
         return mat.node_tree, None
 
@@ -260,7 +292,6 @@ def ensure_import_node_tree(context, tree_type_hint):
         obj = context.object
         if not obj:
             return None, "No active object to add Geometry Nodes to"
-
         for mod in obj.modifiers:
             if mod.type == "NODES":
                 if not mod.node_group:
@@ -268,7 +299,6 @@ def ensure_import_node_tree(context, tree_type_hint):
                         "Geometry Nodes", "GeometryNodeTree"
                     )
                 return mod.node_group, None
-
         mod = obj.modifiers.new("GeometryNodes", "NODES")
         mod.node_group = bpy.data.node_groups.new("Geometry Nodes", "GeometryNodeTree")
         return mod.node_group, None
@@ -276,9 +306,9 @@ def ensure_import_node_tree(context, tree_type_hint):
     return None, f"Cannot auto-create node tree for type '{tree_type_hint}'"
 
 
-# ------------------------
-# Export / Import (core logic)
-# ------------------------
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
 
 
 def _export_single_tree(node_tree):
@@ -295,11 +325,14 @@ def _export_single_tree(node_tree):
             "width": node.width,
             "hide": node.hide,
             "mute": node.mute,
+            # Colour stored only when a custom colour is active.
             "color": list(node.color) if node.use_custom_color else None,
-            "inputs": _export_socket_values(node.inputs),
-            "outputs": _export_socket_values(node.outputs),
+            "inputs": _export_sockets_full(node.inputs),
+            "outputs": _export_sockets_full(node.outputs),
             "parent": node_index[node.parent] if node.parent else None,
-            "node_props": _get_node_mode_properties(node),
+            # Generic RNA for node-type-specific properties; explicitly-handled
+            # props are excluded so they are not applied twice on import.
+            "rna": _serialize_rna_properties(node, skip=_NODE_EXPLICIT_PROPS),
         }
 
         if node.bl_idname == "NodeFrame":
@@ -333,6 +366,7 @@ def _export_single_tree(node_tree):
 
 
 def _collect_groups(node_tree, groups_out, visited):
+    """Recursively gather all nested node groups."""
     for node in node_tree.nodes:
         if node.bl_idname not in GROUP_NODE_TYPES:
             continue
@@ -355,10 +389,16 @@ def export_node_tree_to_json(node_tree):
     return json.dumps(result, separators=(",", ":"))
 
 
+# ---------------------------------------------------------------------------
+# Import
+# ---------------------------------------------------------------------------
+
+
 def _import_single_tree(node_tree, tree_data, groups_map):
     node_tree.nodes.clear()
     created = {}
 
+    # --- Pass 1: create nodes and apply all non-spatial properties ----------
     for nd in tree_data.get("nodes", []):
         try:
             node = node_tree.nodes.new(nd["type"])
@@ -374,7 +414,10 @@ def _import_single_tree(node_tree, tree_data, groups_map):
         colour = nd.get("color")
         if colour is not None:
             node.use_custom_color = True
-            node.color = colour
+            try:
+                node.color = colour
+            except TypeError:
+                node.color = tuple(colour)
 
         if node.bl_idname == "NodeFrame":
             frame_data = nd.get("frame", {})
@@ -386,6 +429,8 @@ def _import_single_tree(node_tree, tree_data, groups_map):
                 except Exception:
                     pass
 
+        # Assign the group node's inner tree before touching sockets so that
+        # the socket list matches what the group exposes.
         grp_name = nd.get("node_group_name")
         if grp_name and grp_name in groups_map:
             try:
@@ -393,15 +438,17 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             except Exception:
                 pass
 
-        _apply_node_mode_properties(node, nd.get("node_props", {}))
+        # Generic RNA (node-type-specific props; explicit props already done).
+        _apply_rna_properties(node, nd.get("rna", {}), skip=_NODE_EXPLICIT_PROPS)
         _apply_color_ramp(node, nd.get("color_ramp"))
-        _apply_socket_values(node.inputs, nd.get("inputs", {}))
-        _apply_socket_values(node.outputs, nd.get("outputs", {}))
+        _apply_sockets_full(node.inputs, nd.get("inputs", []))
+        _apply_sockets_full(node.outputs, nd.get("outputs", []))
 
         node_id = nd.get("id")
         if node_id is not None:
             created[node_id] = node
 
+    # --- Pass 2: locate frames first (children need parents to exist) -------
     for nd in tree_data.get("nodes", []):
         if nd.get("type") != "NodeFrame":
             continue
@@ -412,6 +459,7 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             except Exception:
                 pass
 
+    # --- Pass 3: assign parent frames ---------------------------------------
     for nd in tree_data.get("nodes", []):
         parent_id = nd.get("parent")
         if not parent_id:
@@ -424,6 +472,7 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             except Exception:
                 pass
 
+    # --- Pass 4: locate non-frame nodes (after parenting so offsets work) --
     for nd in tree_data.get("nodes", []):
         if nd.get("type") == "NodeFrame":
             continue
@@ -434,6 +483,7 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             except Exception:
                 pass
 
+    # --- Pass 5: recreate links --------------------------------------------
     for lnk in tree_data.get("links", []):
         try:
             from_node = created.get(lnk["f"])
@@ -443,20 +493,19 @@ def _import_single_tree(node_tree, tree_data, groups_map):
 
             from_idx = lnk.get("fs")
             to_idx = lnk.get("ts")
-            if from_idx is not None and to_idx is not None:
-                if from_idx < len(from_node.outputs) and to_idx < len(to_node.inputs):
-                    node_tree.links.new(
-                        from_node.outputs[from_idx], to_node.inputs[to_idx]
-                    )
-                    continue
+            if (
+                from_idx is not None
+                and to_idx is not None
+                and from_idx < len(from_node.outputs)
+                and to_idx < len(to_node.inputs)
+            ):
+                node_tree.links.new(
+                    from_node.outputs[from_idx],
+                    to_node.inputs[to_idx],
+                )
+                continue
 
-            if "from_socket" in lnk and "to_socket" in lnk:
-                from_socket = from_node.outputs.get(lnk["from_socket"])
-                to_socket = to_node.inputs.get(lnk["to_socket"])
-                if from_socket and to_socket:
-                    node_tree.links.new(from_socket, to_socket)
-                    continue
-
+            # Fallback: match by socket name (supports older exports).
             from_socket = from_node.outputs.get(lnk.get("from_socket_name"))
             to_socket = to_node.inputs.get(lnk.get("to_socket_name"))
             if from_socket and to_socket:
@@ -469,6 +518,7 @@ def _import_single_tree(node_tree, tree_data, groups_map):
 def import_node_tree_from_json(node_tree, json_data):
     data = json.loads(json_data)
 
+    # Support bare single-tree exports (no wrapper object).
     if "main_tree" not in data:
         data = {
             "tree_type": node_tree.bl_idname,
@@ -476,25 +526,28 @@ def import_node_tree_from_json(node_tree, json_data):
             "node_groups": {},
         }
 
-    tree_type = data.get("tree_type", "ShaderNodeTree")
     groups_map = {}
 
-    for grp_name in data.get("node_groups", {}):
+    # Build / reuse existing node groups. Each group carries its own
+    # bl_idname in the export so we use that rather than the main tree type.
+    for grp_name, grp_data in data.get("node_groups", {}).items():
+        grp_type = grp_data.get("tree_type", data.get("tree_type", "ShaderNodeTree"))
         existing = bpy.data.node_groups.get(grp_name)
-        if existing and existing.bl_idname == tree_type:
+        if existing and existing.bl_idname == grp_type:
             groups_map[grp_name] = existing
         else:
-            groups_map[grp_name] = bpy.data.node_groups.new(grp_name, tree_type)
+            groups_map[grp_name] = bpy.data.node_groups.new(grp_name, grp_type)
 
+    # Populate groups before the main tree so group nodes can reference them.
     for grp_name, grp_data in data.get("node_groups", {}).items():
         _import_single_tree(groups_map[grp_name], grp_data, groups_map)
 
     _import_single_tree(node_tree, data["main_tree"], groups_map)
 
 
-# ------------------------
-# Operators / UI / Register
-# ------------------------
+# ---------------------------------------------------------------------------
+# Operators
+# ---------------------------------------------------------------------------
 
 
 class NODECODE_OT_export(bpy.types.Operator):
@@ -507,11 +560,8 @@ class NODECODE_OT_export(bpy.types.Operator):
             self.report({"WARNING"}, err)
             return {"CANCELLED"}
 
-        json_data = export_node_tree_to_json(tree)
-        context.window_manager.clipboard = json_data
-        self.report(
-            {"INFO"}, "Node tree exported to clipboard (all preset values saved)"
-        )
+        context.window_manager.clipboard = export_node_tree_to_json(tree)
+        self.report({"INFO"}, "Node tree exported to clipboard")
         return {"FINISHED"}
 
 
@@ -524,7 +574,7 @@ class NODECODE_OT_import_buffer(bpy.types.Operator):
         try:
             data = json.loads(raw)
         except Exception:
-            self.report({"ERROR"}, "Invalid JSON")
+            self.report({"ERROR"}, "Clipboard does not contain valid JSON")
             return {"CANCELLED"}
 
         tree_type_hint = data.get("tree_type", "ShaderNodeTree")
@@ -541,6 +591,11 @@ class NODECODE_OT_import_buffer(bpy.types.Operator):
         return {"FINISHED"}
 
 
+# ---------------------------------------------------------------------------
+# UI panel
+# ---------------------------------------------------------------------------
+
+
 class NODECODE_PT_panel(bpy.types.Panel):
     bl_label = "Node Code"
     bl_idname = "NODECODE_PT_panel"
@@ -553,6 +608,10 @@ class NODECODE_PT_panel(bpy.types.Panel):
         layout.operator("nodecode.export", icon="COPYDOWN")
         layout.operator("nodecode.import_buffer", icon="PASTEDOWN")
 
+
+# ---------------------------------------------------------------------------
+# Registration
+# ---------------------------------------------------------------------------
 
 classes = (
     NODECODE_OT_export,
