@@ -1,7 +1,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (0, 1, 0),
+    "version": (0, 1, 1),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -24,8 +24,6 @@ GROUP_NODE_TYPES = {
     "TextureNodeGroup",
 }
 
-# Properties handled explicitly during export/import; excluded from the
-# generic RNA round-trip to avoid double-application or ordering conflicts.
 _NODE_EXPLICIT_PROPS = frozenset(
     {
         "name",
@@ -39,6 +37,21 @@ _NODE_EXPLICIT_PROPS = frozenset(
         "use_custom_color",
         "parent",
         "node_tree",
+        "bl_idname",
+        "bl_label",
+        "bl_description",
+        "bl_icon",
+        "bl_width_default",
+        "bl_width_min",
+        "bl_width_max",
+        "bl_height_default",
+        "bl_height_min",
+        "bl_height_max",
+        "location_absolute",
+        "select",
+        "show_preview",
+        "show_texture",
+        "show_options",
     }
 )
 
@@ -178,18 +191,22 @@ def _apply_color_ramp(node, cr_data):
 
 
 def _export_sockets_full(sockets):
-    """Serialise all sockets including their default values.
-
-    ``default_value`` is stored under its own top-level key and excluded from
-    the generic RNA dict to prevent double-application on import.
-    """
     result = []
     for sock in sockets:
-        sock_data = {
-            "name": sock.name,
-            "type": sock.bl_idname,
-            "rna": _serialize_rna_properties(sock, skip=_SOCKET_EXPLICIT_PROPS),
-        }
+        sock_data = {"name": sock.name, "type": sock.bl_idname}
+
+        rna = {}
+        for key, default in {
+            "hide": False,
+            "enabled": True,
+            "hide_value": False,
+        }.items():
+            val = getattr(sock, key, None)
+            if val != default:
+                rna[key] = val
+        if rna:
+            sock_data["rna"] = rna
+
         if hasattr(sock, "default_value"):
             try:
                 sock_data["default_value"] = _serialize_value(sock.default_value)
@@ -321,17 +338,14 @@ def _export_single_tree(node_tree):
             "name": node.name,
             "label": node.label,
             "type": node.bl_idname,
-            "location": [node.location.x, node.location.y],
+            "location": [round(node.location.x, 2), round(node.location.y, 2)],
             "width": node.width,
             "hide": node.hide,
             "mute": node.mute,
-            # Colour stored only when a custom colour is active.
             "color": list(node.color) if node.use_custom_color else None,
             "inputs": _export_sockets_full(node.inputs),
             "outputs": _export_sockets_full(node.outputs),
             "parent": node_index[node.parent] if node.parent else None,
-            # Generic RNA for node-type-specific properties; explicitly-handled
-            # props are excluded so they are not applied twice on import.
             "rna": _serialize_rna_properties(node, skip=_NODE_EXPLICIT_PROPS),
         }
 
@@ -349,7 +363,15 @@ def _export_single_tree(node_tree):
             grp = getattr(node, "node_tree", None)
             if grp:
                 node_data["node_group_name"] = grp.name
-
+        for key in ("label", "hide", "mute", "color", "parent"):
+            if not node_data.get(key):
+                node_data.pop(key, None)
+        if node_data.get("width") == 140.0:
+            node_data.pop("width")
+        if not node_data.get("inputs"):
+            node_data.pop("inputs", None)
+        if not node_data.get("outputs"):
+            node_data.pop("outputs", None)
         data["nodes"].append(node_data)
 
     for link in node_tree.links:
@@ -406,10 +428,12 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             continue
 
         node.name = nd.get("name", node.name)
-        node.label = nd.get("label", "")
-        node.width = nd.get("width", node.width)
+        node.width = nd.get("width", 140.0)
         node.hide = nd.get("hide", False)
         node.mute = nd.get("mute", False)
+        node.label = nd.get("label", "")
+        _apply_sockets_full(node.inputs, nd.get("inputs", []))
+        _apply_sockets_full(node.outputs, nd.get("outputs", []))
 
         colour = nd.get("color")
         if colour is not None:
