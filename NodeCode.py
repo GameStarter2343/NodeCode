@@ -1,7 +1,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (0, 1, 3),
+    "version": (1, 0, 0),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -668,7 +668,7 @@ class NODECODE_OT_import_file(bpy.types.Operator):
 
 
 class NODECODE_PT_panel(bpy.types.Panel):
-    bl_label = "Node Code"
+    bl_label = "NodeCode Converter"
     bl_idname = "NODECODE_PT_panel"
     bl_space_type = "NODE_EDITOR"
     bl_region_type = "UI"
