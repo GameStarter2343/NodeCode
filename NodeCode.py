@@ -399,7 +399,7 @@ def _collect_groups(node_tree, groups_out, visited):
             _collect_groups(grp, groups_out, visited)
 
 
-def export_node_tree_to_json(node_tree):
+def export_node_tree_to_json(node_tree, pretty=False):
     groups = {}
     _collect_groups(node_tree, groups, set())
     result = {
@@ -408,6 +408,8 @@ def export_node_tree_to_json(node_tree):
         "main_tree": _export_single_tree(node_tree),
         "node_groups": groups,
     }
+    if pretty:
+        return json.dumps(result, indent=4)
     return json.dumps(result, separators=(",", ":"))
 
 
@@ -576,7 +578,8 @@ def import_node_tree_from_json(node_tree, json_data):
 
 class NODECODE_OT_export(bpy.types.Operator):
     bl_idname = "nodecode.export"
-    bl_label = "Export Nodes to Clipboard"
+    bl_label = "Compact"
+    bl_description = "Export Nodes to Clipboard in compact format"
 
     def execute(self, context):
         tree, err = get_active_node_tree(context)
@@ -589,9 +592,53 @@ class NODECODE_OT_export(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class NODECODE_OT_export_pretty(bpy.types.Operator):
+    bl_idname = "nodecode.export_pretty"
+    bl_label = "Readable"
+    bl_description = "Export Nodes to Clipboard in human readable format"
+
+    def execute(self, context):
+        tree, err = get_active_node_tree(context)
+        if err:
+            self.report({"WARNING"}, err)
+            return {"CANCELLED"}
+
+        context.window_manager.clipboard = export_node_tree_to_json(tree, True)
+        self.report({"INFO"}, "Node tree exported to clipboard")
+        return {"FINISHED"}
+
+
 class NODECODE_OT_import_buffer(bpy.types.Operator):
     bl_idname = "nodecode.import_buffer"
-    bl_label = "Import Nodes from Clipboard"
+    bl_label = "Clipboard"
+    bl_description = "Import Nodes from Clipboard"
+
+    def execute(self, context):
+        raw = context.window_manager.clipboard
+        try:
+            data = json.loads(raw)
+        except Exception:
+            self.report({"ERROR"}, "Clipboard does not contain valid JSON")
+            return {"CANCELLED"}
+
+        tree_type_hint = data.get("tree_type", "ShaderNodeTree")
+
+        tree, err = get_active_node_tree(context)
+        if err:
+            tree, err = ensure_import_node_tree(context, tree_type_hint)
+            if err:
+                self.report({"WARNING"}, err)
+                return {"CANCELLED"}
+
+        import_node_tree_from_json(tree, raw)
+        self.report({"INFO"}, "Node tree imported successfully")
+        return {"FINISHED"}
+
+
+class NODECODE_OT_import_file(bpy.types.Operator):
+    bl_idname = "nodecode.import_file"
+    bl_label = "File"
+    bl_description = "Import Nodes from File (.txt .json)"
 
     def execute(self, context):
         raw = context.window_manager.clipboard
@@ -629,8 +676,22 @@ class NODECODE_PT_panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        layout.operator("nodecode.export", icon="COPYDOWN")
-        layout.operator("nodecode.import_buffer", icon="PASTEDOWN")
+
+        row = layout.row()
+        row.alignment = "CENTER"
+        row.label(text="Export Nodes To Code", icon="COPYDOWN")
+
+        row = layout.row(align=True)
+        row.operator("nodecode.export")
+        row.operator("nodecode.export_pretty")
+
+        row = layout.row()
+        row.alignment = "CENTER"
+        row.label(text="Import Nodes To Code", icon="PASTEDOWN")
+
+        row = layout.row(align=True)
+        row.operator("nodecode.import_buffer")
+        row.operator("nodecode.import_file")
 
 
 # ---------------------------------------------------------------------------
@@ -639,7 +700,9 @@ class NODECODE_PT_panel(bpy.types.Panel):
 
 classes = (
     NODECODE_OT_export,
+    NODECODE_OT_export_pretty,
     NODECODE_OT_import_buffer,
+    NODECODE_OT_import_file,
     NODECODE_PT_panel,
 )
 
