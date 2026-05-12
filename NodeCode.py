@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -58,24 +58,37 @@ _NODE_EXPLICIT_PROPS = frozenset(
     }
 )
 
-_SOCKET_EXPLICIT_PROPS = frozenset({"default_value"})
-
 
 # ---------------------------------------------------------------------------
 # Generic RNA helpers
 # ---------------------------------------------------------------------------
 
 
+def _round_floats(value, decimals=5):
+    """Recursively round floats in a JSON-safe structure for compactness."""
+    if isinstance(value, float):
+        return round(value, decimals)
+    if isinstance(value, list):
+        return [_round_floats(v, decimals) for v in value]
+    return value
+
+
 def _serialize_value(value):
     """Recursively convert a Blender RNA value to a JSON-safe type."""
-    if isinstance(value, (int, float, str, bool)):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return round(value, 5)
+    if isinstance(value, str):
         return value
 
     if isinstance(
         value,
         (mathutils.Vector, mathutils.Color, mathutils.Euler, mathutils.Quaternion),
     ):
-        return list(value)
+        return [round(v, 5) for v in value]
 
     # Catch-all for array-like objects (e.g. bpy_prop_array).
     if hasattr(value, "__len__") and not isinstance(value, str):
@@ -91,32 +104,65 @@ def _serialize_value(value):
     return str(value)
 
 
-def _serialize_rna_properties(obj, skip=frozenset()):
-    """Return a dict of all writable RNA properties on *obj*, skipping *skip*."""
+def _get_prop_default(prop):
+    """Return the RNA default value for a property, or None if unavailable."""
+    try:
+        # Array properties (vectors, colors, etc.)
+        if hasattr(prop, "default_array") and len(prop.default_array) > 0:
+            return list(prop.default_array)
+        # Scalar properties
+        if hasattr(prop, "default"):
+            return prop.default
+    except Exception:
+        pass
+    return None
+
+
+def _serialize_rna_diff(obj, skip=frozenset()):
+    """Serialize only RNA properties that differ from their defaults."""
     props = {}
-    for prop in obj.bl_rna.properties:
-        identifier = prop.identifier
-        if identifier in {"rna_type"} or identifier in skip:
+    rna = obj.bl_rna
+
+    for prop in rna.properties:
+        key = prop.identifier
+
+        if key in {"rna_type"} or key in skip:
             continue
         if prop.is_readonly:
             continue
+
         try:
-            props[identifier] = _serialize_value(getattr(obj, identifier))
+            value = getattr(obj, key)
         except Exception:
-            pass
+            continue
+
+        # Compare against the actual RNA default, not the descriptor object.
+        default = _get_prop_default(prop)
+        if default is not None:
+            serialized = _serialize_value(value)
+            # Normalise both sides to lists for comparison when array props
+            # may come back as list vs tuple.
+            cmp_value = (
+                serialized
+                if not isinstance(serialized, list)
+                else tuple(serialized)
+                if isinstance(serialized, list)
+                else serialized
+            )
+            cmp_default = default if not isinstance(default, list) else tuple(default)
+            if cmp_value == cmp_default:
+                continue
+
+        props[key] = _serialize_value(value)
+
     return props
 
 
 def _apply_rna_properties(obj, data, skip=frozenset()):
-    """Apply a previously serialised RNA dict back to *obj*.
-
-    Lists are tried first as-is; if that fails they are converted to tuples,
-    which is required by many Blender colour / vector RNA properties.
-    """
+    """Apply a previously serialised RNA dict back to *obj*."""
     for key, value in data.items():
         if key in skip or not hasattr(obj, key):
             continue
-        # Skip ID-datablock placeholders – they cannot be resolved generically.
         if isinstance(value, dict) and "__id__" in value:
             continue
         try:
@@ -145,7 +191,11 @@ def _export_color_ramp(node):
         "interpolation": cr.interpolation,
         "hue_interpolation": cr.hue_interpolation,
         "elements": [
-            {"position": el.position, "color": list(el.color)} for el in cr.elements
+            {
+                "position": round(el.position, 5),
+                "color": [round(c, 5) for c in el.color],
+            }
+            for el in cr.elements
         ],
     }
 
@@ -193,12 +243,19 @@ def _apply_color_ramp(node, cr_data):
 # ---------------------------------------------------------------------------
 
 
-def _export_sockets_full(sockets):
-    result = []
-    for sock in sockets:
-        sock_data = {"name": sock.name, "type": sock.bl_idname}
+def _export_sockets_sparse(sockets, connected_indices=None):
+    """Export only sockets with non-default state, keyed by index string.
 
-        rna = {}
+    ``connected_indices`` is a set of input socket indices whose default_value
+    can be skipped because a link will overwrite them at render time.
+
+    Returns None (omitted from JSON) when every socket is at its default.
+    """
+    result = {}
+    for i, sock in enumerate(sockets):
+        entry = {}
+
+        # Non-default visibility / enabled flags.
         for key, default in {
             "hide": False,
             "enabled": True,
@@ -206,20 +263,54 @@ def _export_sockets_full(sockets):
         }.items():
             val = getattr(sock, key, None)
             if val != default:
-                rna[key] = val
-        if rna:
-            sock_data["rna"] = rna
+                entry[key] = val
 
-        if hasattr(sock, "default_value"):
+        # Skip default_value for connected inputs – the link overwrites it.
+        if hasattr(sock, "default_value") and (
+            connected_indices is None or i not in connected_indices
+        ):
             try:
-                sock_data["default_value"] = _serialize_value(sock.default_value)
+                entry["dv"] = _serialize_value(sock.default_value)
             except Exception:
                 pass
-        result.append(sock_data)
-    return result
+
+        if entry:
+            result[str(i)] = entry
+
+    return result or None
+
+
+def _apply_sockets_sparse(sockets, data):
+    """Apply sparse socket data (index-keyed dict) back to a socket list."""
+    for idx_str, sock_data in data.items():
+        try:
+            sock = sockets[int(idx_str)]
+        except (IndexError, ValueError):
+            continue
+
+        for key in ("hide", "enabled", "hide_value"):
+            if key in sock_data:
+                try:
+                    setattr(sock, key, sock_data[key])
+                except Exception:
+                    pass
+
+        if "dv" in sock_data:
+            value = sock_data["dv"]
+            try:
+                sock.default_value = value
+            except TypeError:
+                if isinstance(value, list):
+                    try:
+                        sock.default_value = tuple(value)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
 
 def _apply_sockets_full(sockets, data):
+    """Apply legacy dense socket list (list of dicts with 'default_value')."""
     for sock, sock_data in zip(sockets, data):
         _apply_rna_properties(sock, sock_data.get("rna", {}))
 
@@ -235,6 +326,16 @@ def _apply_sockets_full(sockets, data):
                         pass
             except Exception:
                 pass
+
+
+def _apply_sockets_any(sockets, data):
+    """Dispatch to sparse or legacy dense handler based on data shape."""
+    if data is None:
+        return
+    if isinstance(data, dict):
+        _apply_sockets_sparse(sockets, data)
+    elif isinstance(data, list):
+        _apply_sockets_full(sockets, data)
 
 
 # ---------------------------------------------------------------------------
@@ -335,28 +436,61 @@ def _export_single_tree(node_tree):
     data = {"nodes": [], "links": []}
     node_index = {node: i for i, node in enumerate(node_tree.nodes)}
 
+    # Pre-compute which input socket indices are driven by a link so we can
+    # skip their default_value in the export (saves significant space).
+    connected_inputs = {}  # id(node) -> set of input indices
+    for link in node_tree.links:
+        node = link.to_node
+        try:
+            idx = list(node.inputs).index(link.to_socket)
+            connected_inputs.setdefault(id(node), set()).add(idx)
+        except ValueError:
+            pass
+
     for node in node_tree.nodes:
+        ci = connected_inputs.get(id(node))
+
         node_data = {
             "id": node_index[node],
             "name": node.name,
-            "label": node.label,
             "type": node.bl_idname,
             "location": [round(node.location.x, 2), round(node.location.y, 2)],
-            "width": node.width,
-            "hide": node.hide,
-            "mute": node.mute,
-            "color": list(node.color) if node.use_custom_color else None,
-            "inputs": _export_sockets_full(node.inputs),
-            "outputs": _export_sockets_full(node.outputs),
-            "parent": node_index[node.parent] if node.parent else None,
-            "rna": _serialize_rna_properties(node, skip=_NODE_EXPLICIT_PROPS),
         }
 
+        # Only write non-default fields to keep output compact.
+        if node.label:
+            node_data["label"] = node.label
+        if node.width != 140.0:
+            node_data["width"] = node.width
+        if node.hide:
+            node_data["hide"] = True
+        if node.mute:
+            node_data["mute"] = True
+        if node.use_custom_color:
+            node_data["color"] = [round(c, 5) for c in node.color]
+        if node.parent:
+            node_data["parent"] = node_index[node.parent]
+
+        inputs = _export_sockets_sparse(node.inputs, connected_indices=ci)
+        if inputs:
+            node_data["inputs"] = inputs
+
+        # Output default_values are only useful for Group Output nodes, but
+        # exporting them sparsely still saves space vs. exporting all.
+        outputs = _export_sockets_sparse(node.outputs)
+        if outputs:
+            node_data["outputs"] = outputs
+
         if node.bl_idname == "NodeFrame":
-            node_data["frame"] = {
-                "label_size": getattr(node, "label_size", None),
-                "shrink": getattr(node, "shrink", False),
-            }
+            frame_data = {}
+            ls = getattr(node, "label_size", None)
+            if ls is not None:
+                frame_data["label_size"] = ls
+            shrink = getattr(node, "shrink", False)
+            if shrink:
+                frame_data["shrink"] = True
+            if frame_data:
+                node_data["frame"] = frame_data
 
         cr_data = _export_color_ramp(node)
         if cr_data is not None:
@@ -366,15 +500,11 @@ def _export_single_tree(node_tree):
             grp = getattr(node, "node_tree", None)
             if grp:
                 node_data["node_group_name"] = grp.name
-        for key in ("label", "hide", "mute", "color", "parent"):
-            if not node_data.get(key):
-                node_data.pop(key, None)
-        if node_data.get("width") == 140.0:
-            node_data.pop("width")
-        if not node_data.get("inputs"):
-            node_data.pop("inputs", None)
-        if not node_data.get("outputs"):
-            node_data.pop("outputs", None)
+
+        rna = _serialize_rna_diff(node, skip=_NODE_EXPLICIT_PROPS)
+        if rna:
+            node_data["rna"] = rna
+
         data["nodes"].append(node_data)
 
     for link in node_tree.links:
@@ -437,8 +567,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
         node.hide = nd.get("hide", False)
         node.mute = nd.get("mute", False)
         node.label = nd.get("label", "")
-        _apply_sockets_full(node.inputs, nd.get("inputs", []))
-        _apply_sockets_full(node.outputs, nd.get("outputs", []))
 
         colour = nd.get("color")
         if colour is not None:
@@ -458,8 +586,7 @@ def _import_single_tree(node_tree, tree_data, groups_map):
                 except Exception:
                     pass
 
-        # Assign the group node's inner tree before touching sockets so that
-        # the socket list matches what the group exposes.
+        # Assign the group node's inner tree before touching sockets.
         grp_name = nd.get("node_group_name")
         if grp_name and grp_name in groups_map:
             try:
@@ -467,11 +594,12 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             except Exception:
                 pass
 
-        # Generic RNA (node-type-specific props; explicit props already done).
         _apply_rna_properties(node, nd.get("rna", {}), skip=_NODE_EXPLICIT_PROPS)
         _apply_color_ramp(node, nd.get("color_ramp"))
-        _apply_sockets_full(node.inputs, nd.get("inputs", []))
-        _apply_sockets_full(node.outputs, nd.get("outputs", []))
+
+        # Handle both sparse (dict) and legacy dense (list) socket formats.
+        _apply_sockets_any(node.inputs, nd.get("inputs"))
+        _apply_sockets_any(node.outputs, nd.get("outputs"))
 
         node_id = nd.get("id")
         if node_id is not None:
@@ -557,8 +685,6 @@ def import_node_tree_from_json(node_tree, json_data):
 
     groups_map = {}
 
-    # Build / reuse existing node groups. Each group carries its own
-    # bl_idname in the export so we use that rather than the main tree type.
     for grp_name, grp_data in data.get("node_groups", {}).items():
         grp_type = grp_data.get("tree_type", data.get("tree_type", "ShaderNodeTree"))
         existing = bpy.data.node_groups.get(grp_name)
@@ -567,7 +693,6 @@ def import_node_tree_from_json(node_tree, json_data):
         else:
             groups_map[grp_name] = bpy.data.node_groups.new(grp_name, grp_type)
 
-    # Populate groups before the main tree so group nodes can reference them.
     for grp_name, grp_data in data.get("node_groups", {}).items():
         _import_single_tree(groups_map[grp_name], grp_data, groups_map)
 
@@ -642,13 +767,25 @@ class NODECODE_OT_import_file(bpy.types.Operator):
     bl_idname = "nodecode.import_file"
     bl_label = "File"
     bl_description = "Import Nodes from File (.txt .json)"
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+    filter_glob: bpy.props.StringProperty(default="*.json;*.txt", options={"HIDDEN"})
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
 
     def execute(self, context):
-        raw = context.window_manager.clipboard
+        try:
+            with open(self.filepath, "r", encoding="utf-8") as f:
+                raw = f.read()
+        except Exception as e:
+            self.report({"ERROR"}, f"Could not read file: {e}")
+            return {"CANCELLED"}
+
         try:
             data = json.loads(raw)
         except Exception:
-            self.report({"ERROR"}, "Clipboard does not contain valid JSON")
+            self.report({"ERROR"}, "File does not contain valid JSON")
             return {"CANCELLED"}
 
         tree_type_hint = data.get("tree_type", "ShaderNodeTree")
