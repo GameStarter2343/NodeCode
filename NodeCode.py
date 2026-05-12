@@ -4,13 +4,15 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 2, 1),
+    "version": (1, 3, 0),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
     "category": "Node",
 }
 
+import base64
+import gzip
 import json
 
 import bpy
@@ -63,6 +65,19 @@ ID_SAFE_PROPS = {"node_tree", "image", "material", "texture", "world", "object"}
 # ---------------------------------------------------------------------------
 # Generic RNA helpers
 # ---------------------------------------------------------------------------
+
+
+def _decode_json(raw):
+    try:
+        if isinstance(raw, str) and not raw.startswith("{"):
+            raw = gzip.decompress(base64.b64decode(raw))
+            raw = raw.decode("utf-8")
+
+        data = json.loads(raw)
+        return raw, data
+
+    except Exception:
+        raise ValueError("Invalid JSON payload")
 
 
 def _resolve_id(value):
@@ -595,8 +610,10 @@ def export_node_tree_to_json(node_tree, pretty=False):
         "node_groups": groups,
     }
     if pretty:
-        return json.dumps(result, indent=4)
-    return json.dumps(result, separators=(",", ":"))
+        return json.dumps(result, separators=(",", ":"))
+    return base64.b64encode(
+        gzip.compress(json.dumps(result, separators=(",", ":")).encode())
+    ).decode()
 
 
 # ---------------------------------------------------------------------------
@@ -796,13 +813,7 @@ class NODECODE_OT_import_buffer(bpy.types.Operator):
     bypassVerCheck: bpy.props.BoolProperty(default=False)
 
     def invoke(self, context, event):
-        raw = context.window_manager.clipboard
-
-        try:
-            data = json.loads(raw)
-        except Exception:
-            self.report({"ERROR"}, "Clipboard does not contain valid JSON")
-            return {"CANCELLED"}
+        raw, data = _decode_json(context.window_manager.clipboard.strip())
 
         addon_version = data.get("version", (0, 0, 0))
 
@@ -823,13 +834,7 @@ class NODECODE_OT_import_buffer(bpy.types.Operator):
         return self.execute(context)
 
     def execute(self, context):
-        raw = context.window_manager.clipboard
-
-        try:
-            data = json.loads(raw)
-        except Exception:
-            self.report({"ERROR"}, "Clipboard does not contain valid JSON")
-            return {"CANCELLED"}
+        raw, data = _decode_json(context.window_manager.clipboard.strip())
 
         tree_type_hint = data.get("tree_type", "ShaderNodeTree")
 
@@ -855,8 +860,14 @@ class NODECODE_OT_import_file(bpy.types.Operator):
     bl_idname = "nodecode.import_file"
     bl_label = "File"
     bl_description = "Import Nodes from File (.txt .json)"
+
     filepath: bpy.props.StringProperty(subtype="FILE_PATH")
-    filter_glob: bpy.props.StringProperty(default="*.json;*.txt", options={"HIDDEN"})
+    filter_glob: bpy.props.StringProperty(
+        default="*.json;*.txt",
+        options={"HIDDEN"},
+    )
+
+    bypassVerCheck: bpy.props.BoolProperty(default=False)
 
     def invoke(self, context, event):
         context.window_manager.fileselect_add(self)
@@ -871,21 +882,40 @@ class NODECODE_OT_import_file(bpy.types.Operator):
             return {"CANCELLED"}
 
         try:
-            data = json.loads(raw)
+            raw, data = _decode_json(raw.strip())
         except Exception:
             self.report({"ERROR"}, "File does not contain valid JSON")
             return {"CANCELLED"}
 
+        addon_version = data.get("version", (0, 0, 0))
+
+        current_ver = ".".join(map(str, bl_info["version"]))
+        imported_ver = ".".join(map(str, addon_version))
+
+        if not self.bypassVerCheck and imported_ver != current_ver:
+            self.bypassVerCheck = True
+
+            return context.window_manager.invoke_confirm(
+                self,
+                None,
+                title="Version Mismatch",
+                message=f"{imported_ver} != {current_ver}\nDo you want to continue?",
+                icon="WARNING",
+            )
+
         tree_type_hint = data.get("tree_type", "ShaderNodeTree")
 
         tree, err = get_active_node_tree(context)
+
         if err:
             tree, err = ensure_import_node_tree(context, tree_type_hint)
+
             if err:
                 self.report({"WARNING"}, err)
                 return {"CANCELLED"}
 
         import_node_tree_from_json(tree, raw)
+
         self.bypassVerCheck = False
 
         self.report({"INFO"}, "Node tree imported successfully")
@@ -919,7 +949,7 @@ class NODECODE_PT_panel(bpy.types.Panel):
             }
             label = TREE_TYPE_LABELS.get(tree.bl_idname, tree.bl_idname)
             if space.edit_tree and space.edit_tree is not space.node_tree:
-                label += f"  ›  {space.edit_tree.name}"
+                label += f"  ›  {space.edit_tree.name}"  # pyright: ignore[reportOperatorIssue]
             layout.label(text=label, icon="NODETREE")
 
             frames = sum(1 for n in tree.nodes if n.bl_idname == "NodeFrame")
