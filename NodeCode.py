@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 3, 0),
+    "version": (1, 4, 0),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -942,49 +942,57 @@ class NODECODE_PT_panel(bpy.types.Panel):
         tree = (space.edit_tree or space.node_tree) if space else None
         if tree:
             TREE_TYPE_LABELS = {
-                "ShaderNodeTree": "Shader / World",
-                "GeometryNodeTree": "Geometry Nodes",
-                "CompositorNodeTree": "Compositor",
-                "TextureNodeTree": "Texture",
+                "ShaderNodeTree": ("Shader", "NODE_MATERIAL"),
+                "GeometryNodeTree": ("Geometry", "GEOMETRY_NODES"),
+                "CompositorNodeTree": ("Compositor", "NODE_COMPOSITING"),
+                "TextureNodeTree": ("Texture", "NODE_TEXTURE"),
             }
             label = TREE_TYPE_LABELS.get(tree.bl_idname, tree.bl_idname)
-            if space.edit_tree and space.edit_tree is not space.node_tree:
-                label += f"  ›  {space.edit_tree.name}"  # pyright: ignore[reportOperatorIssue]
-            layout.label(text=label, icon="NODETREE")
+            layout.label(text=label[0], icon=label[1])
 
             frames = sum(1 for n in tree.nodes if n.bl_idname == "NodeFrame")
             groups = sum(1 for n in tree.nodes if n.bl_idname in GROUP_NODE_TYPES)
             regular = len(tree.nodes) - frames - groups
 
-            col = layout.column(align=True)
-            col.label(text=f"Nodes:  {regular}", icon="NODE")
-            col.label(text=f"Links:  {len(tree.links)}", icon="LINKED")
-            if frames:
-                col.label(text=f"Frames: {frames}", icon="OBJECT_DATA")
-            if groups:
-                col.label(text=f"Groups: {groups}", icon="NODETREE")
+            row = layout.row(align=True)
+            row.alignment = "EXPAND"
+
+            items = [
+                ("Nodes", regular, "NODE"),
+                ("Links", len(tree.links), "LINKED"),
+                ("Frames", frames, "OBJECT_DATA"),
+                ("Groups", groups, "NODETREE"),
+            ]
+
+            for label_text, value, ICON in items:
+                col = row.column(align=True)
+                col.alignment = "CENTER"
+
+                col.label(text=label_text, icon="NONE")
+                col.label(text=f"{value}", icon=ICON)
+
+            layout.separator()
+
+            # ── Export ─────────────────────────────────────────────────────────
+            row = layout.row()
+            row.alignment = "CENTER"
+            row.label(text="Export Nodes To Code", icon="COPYDOWN")
+
+            row = layout.row(align=True)
+            row.operator("nodecode.export")
+            row.operator("nodecode.export_pretty")
+
+            # ── Import ─────────────────────────────────────────────────────────
+            row = layout.row()
+            row.alignment = "CENTER"
+            row.label(text="Import Nodes To Code", icon="PASTEDOWN")
+
+            row = layout.row(align=True)
+            row.operator("nodecode.import_buffer")
+            row.operator("nodecode.import_file")
+
         else:
             layout.label(text="No active node tree", icon="ERROR")
-
-        layout.separator()
-
-        # ── Export ─────────────────────────────────────────────────────────
-        row = layout.row()
-        row.alignment = "CENTER"
-        row.label(text="Export Nodes To Code", icon="COPYDOWN")
-
-        row = layout.row(align=True)
-        row.operator("nodecode.export")
-        row.operator("nodecode.export_pretty")
-
-        # ── Import ─────────────────────────────────────────────────────────
-        row = layout.row()
-        row.alignment = "CENTER"
-        row.label(text="Import Nodes To Code", icon="PASTEDOWN")
-
-        row = layout.row(align=True)
-        row.operator("nodecode.import_buffer")
-        row.operator("nodecode.import_file")
 
 
 # ---------------------------------------------------------------------------
