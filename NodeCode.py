@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 0, 1),
+    "version": (1, 0, 2),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -438,14 +438,15 @@ def _export_single_tree(node_tree):
 
     # Pre-compute which input socket indices are driven by a link so we can
     # skip their default_value in the export (saves significant space).
+    # Use identity (is) rather than equality to avoid mismatches when multiple
+    # sockets share the same type/name (e.g. Voronoi Smoothness vs others).
     connected_inputs = {}  # id(node) -> set of input indices
     for link in node_tree.links:
         node = link.to_node
-        try:
-            idx = list(node.inputs).index(link.to_socket)
-            connected_inputs.setdefault(id(node), set()).add(idx)
-        except ValueError:
-            pass
+        for idx, sock in enumerate(node.inputs):
+            if sock is link.to_socket:
+                connected_inputs.setdefault(id(node), set()).add(idx)
+                break
 
     for node in node_tree.nodes:
         ci = connected_inputs.get(id(node))
