@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 0, 2),
+    "version": (1, 1, 0),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -817,7 +817,39 @@ class NODECODE_PT_panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        space = context.space_data
 
+        # ── Tree info & statistics ──────────────────────────────────────────
+        tree = (space.edit_tree or space.node_tree) if space else None
+        if tree:
+            TREE_TYPE_LABELS = {
+                "ShaderNodeTree": "Shader / World",
+                "GeometryNodeTree": "Geometry Nodes",
+                "CompositorNodeTree": "Compositor",
+                "TextureNodeTree": "Texture",
+            }
+            label = TREE_TYPE_LABELS.get(tree.bl_idname, tree.bl_idname)
+            if space.edit_tree and space.edit_tree is not space.node_tree:
+                label += f"  ›  {space.edit_tree.name}"
+            layout.label(text=label, icon="NODETREE")
+
+            frames = sum(1 for n in tree.nodes if n.bl_idname == "NodeFrame")
+            groups = sum(1 for n in tree.nodes if n.bl_idname in GROUP_NODE_TYPES)
+            regular = len(tree.nodes) - frames - groups
+
+            col = layout.column(align=True)
+            col.label(text=f"Nodes:  {regular}", icon="NODE")
+            col.label(text=f"Links:  {len(tree.links)}", icon="LINKED")
+            if frames:
+                col.label(text=f"Frames: {frames}", icon="OBJECT_DATA")
+            if groups:
+                col.label(text=f"Groups: {groups}", icon="NODETREE")
+        else:
+            layout.label(text="No active node tree", icon="ERROR")
+
+        layout.separator()
+
+        # ── Export ─────────────────────────────────────────────────────────
         row = layout.row()
         row.alignment = "CENTER"
         row.label(text="Export Nodes To Code", icon="COPYDOWN")
@@ -826,6 +858,7 @@ class NODECODE_PT_panel(bpy.types.Panel):
         row.operator("nodecode.export")
         row.operator("nodecode.export_pretty")
 
+        # ── Import ─────────────────────────────────────────────────────────
         row = layout.row()
         row.alignment = "CENTER"
         row.label(text="Import Nodes To Code", icon="PASTEDOWN")
