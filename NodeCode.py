@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 1, 0),
+    "version": (1, 2, 0),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -71,6 +71,14 @@ def _round_floats(value, decimals=5):
     if isinstance(value, list):
         return [_round_floats(v, decimals) for v in value]
     return value
+
+
+def _normalize_compare(v):
+    if isinstance(v, (list, tuple)):
+        return tuple(_normalize_compare(x) for x in v)
+    if isinstance(v, float):
+        return round(v, 5)
+    return v
 
 
 def _serialize_value(value):
@@ -142,15 +150,7 @@ def _serialize_rna_diff(obj, skip=frozenset()):
             serialized = _serialize_value(value)
             # Normalise both sides to lists for comparison when array props
             # may come back as list vs tuple.
-            cmp_value = (
-                serialized
-                if not isinstance(serialized, list)
-                else tuple(serialized)
-                if isinstance(serialized, list)
-                else serialized
-            )
-            cmp_default = default if not isinstance(default, list) else tuple(default)
-            if cmp_value == cmp_default:
+            if _normalize_compare(serialized) == _normalize_compare(default):
                 continue
 
         props[key] = _serialize_value(value)
@@ -740,10 +740,39 @@ class NODECODE_OT_export_pretty(bpy.types.Operator):
 class NODECODE_OT_import_buffer(bpy.types.Operator):
     bl_idname = "nodecode.import_buffer"
     bl_label = "Clipboard"
-    bl_description = "Import Nodes from Clipboard"
+
+    bypassVerCheck: bpy.props.BoolProperty(default=False)
+
+    def invoke(self, context, event):
+        raw = context.window_manager.clipboard
+
+        try:
+            data = json.loads(raw)
+        except Exception:
+            self.report({"ERROR"}, "Clipboard does not contain valid JSON")
+            return {"CANCELLED"}
+
+        addon_version = data.get("version", (0, 0, 0))
+
+        current_ver = ".".join(map(str, bl_info["version"]))
+        imported_ver = ".".join(map(str, addon_version))
+
+        if not self.bypassVerCheck and imported_ver != current_ver:
+            self.bypassVerCheck = True
+
+            return context.window_manager.invoke_confirm(
+                self,
+                event,
+                title="Version Mismatch",
+                message=f"{imported_ver} != {current_ver}\n Do you want to continue?",
+                icon="WARNING",
+            )
+
+        return self.execute(context)
 
     def execute(self, context):
         raw = context.window_manager.clipboard
+
         try:
             data = json.loads(raw)
         except Exception:
@@ -753,13 +782,19 @@ class NODECODE_OT_import_buffer(bpy.types.Operator):
         tree_type_hint = data.get("tree_type", "ShaderNodeTree")
 
         tree, err = get_active_node_tree(context)
+
         if err:
             tree, err = ensure_import_node_tree(context, tree_type_hint)
+
             if err:
                 self.report({"WARNING"}, err)
                 return {"CANCELLED"}
 
         import_node_tree_from_json(tree, raw)
+
+        # reset for next operator run
+        self.bypassVerCheck = False
+
         self.report({"INFO"}, "Node tree imported successfully")
         return {"FINISHED"}
 
@@ -799,6 +834,8 @@ class NODECODE_OT_import_file(bpy.types.Operator):
                 return {"CANCELLED"}
 
         import_node_tree_from_json(tree, raw)
+        self.bypassVerCheck = False
+
         self.report({"INFO"}, "Node tree imported successfully")
         return {"FINISHED"}
 
