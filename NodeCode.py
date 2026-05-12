@@ -1,3 +1,6 @@
+# Copyright 2026 GameStarter2343
+# Licensed under the Apache License 2.0
+
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
