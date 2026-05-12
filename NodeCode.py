@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 2, 0),
+    "version": (1, 2, 1),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -58,10 +58,61 @@ _NODE_EXPLICIT_PROPS = frozenset(
     }
 )
 
+ID_SAFE_PROPS = {"node_tree", "image", "material", "texture", "world", "object"}
 
 # ---------------------------------------------------------------------------
 # Generic RNA helpers
 # ---------------------------------------------------------------------------
+
+
+def _resolve_id(value):
+    """Resolve serialized Blender ID reference back to actual datablock."""
+    if not isinstance(value, dict):
+        return value
+
+    if "__id__" not in value:
+        return value
+
+    name = value.get("__id__")
+    id_type = value.get("__type__")
+
+    try:
+        # Node trees (Geometry/Shader/Compositor groups)
+        if id_type == "NodeTree" or id_type == "NodeGroup":
+            return bpy.data.node_groups.get(name)
+
+        if id_type == "Image":
+            return bpy.data.images.get(name)
+
+        if id_type == "Material":
+            return bpy.data.materials.get(name)
+
+        if id_type == "Texture":
+            return bpy.data.textures.get(name)
+
+        if id_type == "World":
+            return bpy.data.worlds.get(name)
+
+        if id_type == "Object":
+            return bpy.data.objects.get(name)
+
+        # Fallback: try any ID datablock collections generically
+        for collection in (
+            bpy.data.node_groups,
+            bpy.data.images,
+            bpy.data.materials,
+            bpy.data.textures,
+            bpy.data.worlds,
+            bpy.data.objects,
+        ):
+            obj = collection.get(name)
+            if obj:
+                return obj
+
+    except Exception:
+        return None
+
+    return None
 
 
 def _round_floats(value, decimals=5):
@@ -163,8 +214,9 @@ def _apply_rna_properties(obj, data, skip=frozenset()):
     for key, value in data.items():
         if key in skip or not hasattr(obj, key):
             continue
-        if isinstance(value, dict) and "__id__" in value:
-            continue
+
+        if key in ID_SAFE_PROPS and isinstance(value, dict):
+            value = _resolve_id(value)
         try:
             setattr(obj, key, value)
         except TypeError:
