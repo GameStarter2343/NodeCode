@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 4, 0),
+    "version": (1, 5, 0),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -12,8 +12,8 @@ bl_info = {
 }
 
 import base64
-import gzip
 import json
+import lzma
 
 import bpy
 import mathutils
@@ -69,8 +69,8 @@ ID_SAFE_PROPS = {"node_tree", "image", "material", "texture", "world", "object"}
 
 def _decode_json(raw):
     try:
-        if isinstance(raw, str) and not raw.startswith("{"):
-            raw = gzip.decompress(base64.b64decode(raw))
+        if not raw.startswith("{"):
+            raw = lzma.decompress(base64.a85decode(raw.encode("ascii")))
             raw = raw.decode("utf-8")
 
         data = json.loads(raw)
@@ -603,17 +603,22 @@ def _collect_groups(node_tree, groups_out, visited):
 def export_node_tree_to_json(node_tree, pretty=False):
     groups = {}
     _collect_groups(node_tree, groups, set())
+
     result = {
         "version": bl_info["version"],
         "tree_type": node_tree.bl_idname,
         "main_tree": _export_single_tree(node_tree),
         "node_groups": groups,
     }
+
     if pretty:
         return json.dumps(result, separators=(",", ":"))
-    return base64.b64encode(
-        gzip.compress(json.dumps(result, separators=(",", ":")).encode())
-    ).decode()
+
+    payload = json.dumps(result, separators=(",", ":")).encode("utf-8")
+
+    compressed = lzma.compress(payload, preset=9)
+
+    return base64.a85encode(compressed).decode("ascii")
 
 
 # ---------------------------------------------------------------------------
