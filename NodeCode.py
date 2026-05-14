@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 5, 2),
+    "version": (1, 5, 3),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -653,7 +653,12 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             except Exception:
                 pass
 
-        _apply_rna_properties(node, nd.get("rna", {}), skip=_NODE_EXPLICIT_PROPS)
+        _apply_rna_properties(
+            node,
+            nd.get("rna", {}),
+            skip=_NODE_EXPLICIT_PROPS,
+        )
+
         _apply_color_ramp(node, nd.get("color_ramp"))
 
         _apply_sockets_any(node.inputs, nd.get("inputs"))
@@ -663,32 +668,27 @@ def _import_single_tree(node_tree, tree_data, groups_map):
         if node_id is not None:
             created[node_id] = node
 
-    for nd in tree_data.get("nodes", []):
-        if nd.get("type") != "NodeFrame":
-            continue
-        node = created.get(nd.get("id"))
-        if node:
-            try:
-                node.location = nd.get("location", [0, 0])
-            except Exception:
-                pass
-
+    # Assign parenting first
     for nd in tree_data.get("nodes", []):
         parent_id = nd.get("parent")
         if not parent_id:
             continue
+
         node = created.get(nd.get("id"))
         parent = created.get(parent_id)
+
         if node and parent:
             try:
                 node.parent = parent
             except Exception:
                 pass
 
+    # Assign ALL locations only after parenting is finalized.
+    # Blender recalculates child coordinates when parent is set,
+    # including nested NodeFrame hierarchies.
     for nd in tree_data.get("nodes", []):
-        if nd.get("type") == "NodeFrame":
-            continue
         node = created.get(nd.get("id"))
+
         if node:
             try:
                 node.location = nd.get("location", [0, 0])
@@ -699,11 +699,13 @@ def _import_single_tree(node_tree, tree_data, groups_map):
         try:
             from_node = created.get(lnk["f"])
             to_node = created.get(lnk["t"])
+
             if not from_node or not to_node:
                 continue
 
             from_idx = lnk.get("fs")
             to_idx = lnk.get("ts")
+
             if (
                 from_idx is not None
                 and to_idx is not None
@@ -718,6 +720,7 @@ def _import_single_tree(node_tree, tree_data, groups_map):
 
             from_socket = from_node.outputs.get(lnk.get("from_socket_name"))
             to_socket = to_node.inputs.get(lnk.get("to_socket_name"))
+
             if from_socket and to_socket:
                 node_tree.links.new(from_socket, to_socket)
 
