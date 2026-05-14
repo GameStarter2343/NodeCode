@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 5, 1),
+    "version": (1, 5, 2),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -794,10 +794,13 @@ class NODECODE_OT_import_buffer(bpy.types.Operator):
 
     bypassVerCheck: bpy.props.BoolProperty(default=False)  # pyright: ignore
 
-    def invoke(self, context, event):
-        raw, data = _decode_json(context.window_manager.clipboard.strip())
+    _raw = None
+    _data = None
 
-        addon_version = data.get("version", (0, 0, 0))
+    def invoke(self, context, event):
+        self._raw, self._data = _decode_json(context.window_manager.clipboard.strip())
+
+        addon_version = self._data.get("version", (0, 0, 0))
 
         current_ver = ".".join(map(str, bl_info["version"]))
         imported_ver = ".".join(map(str, addon_version))
@@ -816,9 +819,12 @@ class NODECODE_OT_import_buffer(bpy.types.Operator):
         return self.execute(context)
 
     def execute(self, context):
-        raw, data = _decode_json(context.window_manager.clipboard.strip())
+        if self._raw is None or self._data is None:
+            self._raw, self._data = _decode_json(
+                context.window_manager.clipboard.strip()
+            )
 
-        tree_type_hint = data.get("tree_type", "ShaderNodeTree")
+        tree_type_hint = self._data.get("tree_type", "ShaderNodeTree")
 
         tree, err = get_active_node_tree(context)
 
@@ -829,9 +835,10 @@ class NODECODE_OT_import_buffer(bpy.types.Operator):
                 self.report({"WARNING"}, err)
                 return {"CANCELLED"}
 
-        import_node_tree_from_json(tree, raw)
+        import_node_tree_from_json(tree, self._raw)
 
-        # reset for next operator run
+        self._raw = None
+        self._data = None
         self.bypassVerCheck = False
 
         self.report({"INFO"}, "Node tree imported successfully")
