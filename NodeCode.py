@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 5, 3),
+    "version": (1, 5, 4),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -42,16 +42,6 @@ _NODE_EXPLICIT_PROPS = frozenset(
         "use_custom_color",
         "parent",
         "node_tree",
-        "bl_idname",
-        "bl_label",
-        "bl_description",
-        "bl_icon",
-        "bl_width_default",
-        "bl_width_min",
-        "bl_width_max",
-        "bl_height_default",
-        "bl_height_min",
-        "bl_height_max",
         "location_absolute",
         "select",
         "show_preview",
@@ -284,9 +274,7 @@ def _apply_color_ramp(node, cr_data):
     while len(cr.elements) < target_count:
         cr.elements.new(0.0)
 
-    for i in range(target_count - 1, -1, -1):
-        ed = elements_data[i]
-        el = cr.elements[i]
+    for el, ed in zip(list(cr.elements), elements_data):
         try:
             el.position = ed["position"]
         except Exception:
@@ -794,6 +782,7 @@ class NODECODE_OT_export_pretty(bpy.types.Operator):
 class NODECODE_OT_import_buffer(bpy.types.Operator):
     bl_idname = "nodecode.import_buffer"
     bl_label = "Clipboard"
+    bl_description = "Import Nodes from Clipboard"
 
     bypassVerCheck: bpy.props.BoolProperty(default=False)  # pyright: ignore
 
