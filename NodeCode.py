@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 5, 0),
+    "version": (1, 5, 1),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -15,8 +15,8 @@ import base64
 import json
 import lzma
 
-import bpy
-import mathutils
+import bpy  # pyright: ignore
+import mathutils  # pyright: ignore
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -171,9 +171,8 @@ def _serialize_value(value):
         except Exception:
             pass
 
-    # ID datablocks (Image, NodeTree, …) – store name + type for reference.
     if isinstance(value, bpy.types.ID):
-        return {"__id__": value.name, "__type__": value.__class__.__name__}
+        return {"__id__": value.name, "__type__": value.__class__.__name__}  # pyright: ignore
 
     return str(value)
 
@@ -181,10 +180,9 @@ def _serialize_value(value):
 def _get_prop_default(prop):
     """Return the RNA default value for a property, or None if unavailable."""
     try:
-        # Array properties (vectors, colors, etc.)
         if hasattr(prop, "default_array") and len(prop.default_array) > 0:
             return list(prop.default_array)
-        # Scalar properties
+
         if hasattr(prop, "default"):
             return prop.default
     except Exception:
@@ -210,12 +208,9 @@ def _serialize_rna_diff(obj, skip=frozenset()):
         except Exception:
             continue
 
-        # Compare against the actual RNA default, not the descriptor object.
         default = _get_prop_default(prop)
         if default is not None:
             serialized = _serialize_value(value)
-            # Normalise both sides to lists for comparison when array props
-            # may come back as list vs tuple.
             if _normalize_compare(serialized) == _normalize_compare(default):
                 continue
 
@@ -322,7 +317,6 @@ def _export_sockets_sparse(sockets, connected_indices=None):
     for i, sock in enumerate(sockets):
         entry = {}
 
-        # Non-default visibility / enabled flags.
         for key, default in {
             "hide": False,
             "enabled": True,
@@ -332,7 +326,6 @@ def _export_sockets_sparse(sockets, connected_indices=None):
             if val != default:
                 entry[key] = val
 
-        # Skip default_value for connected inputs – the link overwrites it.
         if hasattr(sock, "default_value") and (
             connected_indices is None or i not in connected_indices
         ):
@@ -503,11 +496,7 @@ def _export_single_tree(node_tree):
     data = {"nodes": [], "links": []}
     node_index = {node: i for i, node in enumerate(node_tree.nodes)}
 
-    # Pre-compute which input socket indices are driven by a link so we can
-    # skip their default_value in the export (saves significant space).
-    # Use identity (is) rather than equality to avoid mismatches when multiple
-    # sockets share the same type/name (e.g. Voronoi Smoothness vs others).
-    connected_inputs = {}  # id(node) -> set of input indices
+    connected_inputs = {}
     for link in node_tree.links:
         node = link.to_node
         for idx, sock in enumerate(node.inputs):
@@ -525,7 +514,6 @@ def _export_single_tree(node_tree):
             "location": [round(node.location.x, 2), round(node.location.y, 2)],
         }
 
-        # Only write non-default fields to keep output compact.
         if node.label:
             node_data["label"] = node.label
         if node.width != 140.0:
@@ -543,8 +531,6 @@ def _export_single_tree(node_tree):
         if inputs:
             node_data["inputs"] = inputs
 
-        # Output default_values are only useful for Group Output nodes, but
-        # exporting them sparsely still saves space vs. exporting all.
         outputs = _export_sockets_sparse(node.outputs)
         if outputs:
             node_data["outputs"] = outputs
@@ -600,7 +586,7 @@ def _collect_groups(node_tree, groups_out, visited):
             _collect_groups(grp, groups_out, visited)
 
 
-def export_node_tree_to_json(node_tree, pretty=False):
+def export_node_tree_to_json(node_tree, compact=False):
     groups = {}
     _collect_groups(node_tree, groups, set())
 
@@ -611,7 +597,7 @@ def export_node_tree_to_json(node_tree, pretty=False):
         "node_groups": groups,
     }
 
-    if pretty:
+    if not compact:
         return json.dumps(result, separators=(",", ":"))
 
     payload = json.dumps(result, separators=(",", ":")).encode("utf-8")
@@ -630,7 +616,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
     node_tree.nodes.clear()
     created = {}
 
-    # --- Pass 1: create nodes and apply all non-spatial properties ----------
     for nd in tree_data.get("nodes", []):
         try:
             node = node_tree.nodes.new(nd["type"])
@@ -661,7 +646,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
                 except Exception:
                     pass
 
-        # Assign the group node's inner tree before touching sockets.
         grp_name = nd.get("node_group_name")
         if grp_name and grp_name in groups_map:
             try:
@@ -672,7 +656,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
         _apply_rna_properties(node, nd.get("rna", {}), skip=_NODE_EXPLICIT_PROPS)
         _apply_color_ramp(node, nd.get("color_ramp"))
 
-        # Handle both sparse (dict) and legacy dense (list) socket formats.
         _apply_sockets_any(node.inputs, nd.get("inputs"))
         _apply_sockets_any(node.outputs, nd.get("outputs"))
 
@@ -680,7 +663,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
         if node_id is not None:
             created[node_id] = node
 
-    # --- Pass 2: locate frames first (children need parents to exist) -------
     for nd in tree_data.get("nodes", []):
         if nd.get("type") != "NodeFrame":
             continue
@@ -691,7 +673,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             except Exception:
                 pass
 
-    # --- Pass 3: assign parent frames ---------------------------------------
     for nd in tree_data.get("nodes", []):
         parent_id = nd.get("parent")
         if not parent_id:
@@ -704,7 +685,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             except Exception:
                 pass
 
-    # --- Pass 4: locate non-frame nodes (after parenting so offsets work) --
     for nd in tree_data.get("nodes", []):
         if nd.get("type") == "NodeFrame":
             continue
@@ -715,7 +695,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             except Exception:
                 pass
 
-    # --- Pass 5: recreate links --------------------------------------------
     for lnk in tree_data.get("links", []):
         try:
             from_node = created.get(lnk["f"])
@@ -737,7 +716,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
                 )
                 continue
 
-            # Fallback: match by socket name (supports older exports).
             from_socket = from_node.outputs.get(lnk.get("from_socket_name"))
             to_socket = to_node.inputs.get(lnk.get("to_socket_name"))
             if from_socket and to_socket:
@@ -750,7 +728,6 @@ def _import_single_tree(node_tree, tree_data, groups_map):
 def import_node_tree_from_json(node_tree, json_data):
     data = json.loads(json_data)
 
-    # Support bare single-tree exports (no wrapper object).
     if "main_tree" not in data:
         data = {
             "tree_type": node_tree.bl_idname,
@@ -790,7 +767,7 @@ class NODECODE_OT_export(bpy.types.Operator):
             self.report({"WARNING"}, err)
             return {"CANCELLED"}
 
-        context.window_manager.clipboard = export_node_tree_to_json(tree)
+        context.window_manager.clipboard = export_node_tree_to_json(tree, True)
         self.report({"INFO"}, "Node tree exported to clipboard")
         return {"FINISHED"}
 
@@ -806,7 +783,7 @@ class NODECODE_OT_export_pretty(bpy.types.Operator):
             self.report({"WARNING"}, err)
             return {"CANCELLED"}
 
-        context.window_manager.clipboard = export_node_tree_to_json(tree, True)
+        context.window_manager.clipboard = export_node_tree_to_json(tree)
         self.report({"INFO"}, "Node tree exported to clipboard")
         return {"FINISHED"}
 
@@ -815,7 +792,7 @@ class NODECODE_OT_import_buffer(bpy.types.Operator):
     bl_idname = "nodecode.import_buffer"
     bl_label = "Clipboard"
 
-    bypassVerCheck: bpy.props.BoolProperty(default=False)
+    bypassVerCheck: bpy.props.BoolProperty(default=False)  # pyright: ignore
 
     def invoke(self, context, event):
         raw, data = _decode_json(context.window_manager.clipboard.strip())
@@ -866,13 +843,13 @@ class NODECODE_OT_import_file(bpy.types.Operator):
     bl_label = "File"
     bl_description = "Import Nodes from File (.txt .json)"
 
-    filepath: bpy.props.StringProperty(subtype="FILE_PATH")
-    filter_glob: bpy.props.StringProperty(
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH")  # pyright: ignore
+    filter_glob: bpy.props.StringProperty(  # pyright: ignore
         default="*.json;*.txt",
         options={"HIDDEN"},
     )
 
-    bypassVerCheck: bpy.props.BoolProperty(default=False)
+    bypassVerCheck: bpy.props.BoolProperty(default=False)  # pyright: ignore
 
     def invoke(self, context, event):
         context.window_manager.fileselect_add(self)
@@ -943,7 +920,6 @@ class NODECODE_PT_panel(bpy.types.Panel):
         layout = self.layout
         space = context.space_data
 
-        # ── Tree info & statistics ──────────────────────────────────────────
         tree = (space.edit_tree or space.node_tree) if space else None
         if tree:
             TREE_TYPE_LABELS = {
@@ -953,7 +929,7 @@ class NODECODE_PT_panel(bpy.types.Panel):
                 "TextureNodeTree": ("Texture", "NODE_TEXTURE"),
             }
             label = TREE_TYPE_LABELS.get(tree.bl_idname, tree.bl_idname)
-            layout.label(text=label[0], icon=label[1])
+            layout.label(text=label[0], icon=label[1])  # pyright: ignore
 
             frames = sum(1 for n in tree.nodes if n.bl_idname == "NodeFrame")
             groups = sum(1 for n in tree.nodes if n.bl_idname in GROUP_NODE_TYPES)
@@ -978,7 +954,6 @@ class NODECODE_PT_panel(bpy.types.Panel):
 
             layout.separator()
 
-            # ── Export ─────────────────────────────────────────────────────────
             row = layout.row()
             row.alignment = "CENTER"
             row.label(text="Export Nodes To Code", icon="COPYDOWN")
@@ -987,7 +962,6 @@ class NODECODE_PT_panel(bpy.types.Panel):
             row.operator("nodecode.export")
             row.operator("nodecode.export_pretty")
 
-            # ── Import ─────────────────────────────────────────────────────────
             row = layout.row()
             row.alignment = "CENTER"
             row.label(text="Import Nodes To Code", icon="PASTEDOWN")
