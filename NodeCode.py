@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 5, 4),
+    "version": (1, 5, 5),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -485,6 +485,8 @@ def _export_single_tree(node_tree):
     node_index = {node: i for i, node in enumerate(node_tree.nodes)}
 
     connected_inputs = {}
+    data["tree_type"] = node_tree.bl_idname
+
     for link in node_tree.links:
         node = link.to_node
         for idx, sock in enumerate(node.inputs):
@@ -558,7 +560,6 @@ def _export_single_tree(node_tree):
                 "ts": list(link.to_node.inputs).index(link.to_socket),
             }
         )
-
     return data
 
 
@@ -852,6 +853,7 @@ class NODECODE_OT_import_file(bpy.types.Operator):
 
     def invoke(self, context, event):
         context.window_manager.fileselect_add(self)
+
         return {"RUNNING_MODAL"}
 
     def execute(self, context):
