@@ -1080,13 +1080,18 @@ class NODECODE_PT_panel(bpy.types.Panel):
             row.label(text="Export", icon="EXPORT")
 
             box.label(text="Estimated file:")
-            col = box.column(align=True)
+            row = box.row().split(factor=0.03)
+            row.label()
+            col = row.column(align=True)
             col.alignment = "CENTER"
 
-            col.label(text=f"raw JSON: {len(payload) / 1000:.1f}k symbols")
-            col.label(text=f"compact: {len(compressed) / 1000:.1f}k symbols")
+            col.label(text=f"raw JSON: {len(payload)} symbols", icon="TEXT")
             col.label(
-                text=f"compression ratio: {round((1 - 1 / (len(payload) / len(compressed))) * 100)}%"
+                text=f"compact: {len(compressed)} symbols", icon="FULLSCREEN_EXIT"
+            )
+            col.label(
+                text=f"compression ratio: {round((1 - 1 / (len(payload) / len(compressed))) * 100, 1)}%",
+                icon="MOD_LENGTH",
             )
 
             col = box.column(align=True)
@@ -1124,7 +1129,7 @@ class NODECODE_PT_panel(bpy.types.Panel):
             box = layout.box()
             row = box.row()
             row.alignment = "CENTER"
-            row.label(text="Settings", icon="PROPERTIES")
+            row.label(text="Settings", icon="TOOL_SETTINGS")
 
             row = box.row(align=True).split(factor=0.35)
             row.label(text="Compression")
