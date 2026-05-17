@@ -603,8 +603,9 @@ def export_node_tree_to_json(node_tree, compression, compact=False):
 # ---------------------------------------------------------------------------
 
 
-def _import_single_tree(node_tree, tree_data, groups_map):
-    node_tree.nodes.clear()
+def _import_single_tree(node_tree, tree_data, groups_map, context):
+    if context.scene.EraseNodes:
+        node_tree.nodes.clear()
     created = {}
 
     for nd in tree_data.get("nodes", []):
@@ -719,7 +720,7 @@ def _import_single_tree(node_tree, tree_data, groups_map):
             pass
 
 
-def import_node_tree_from_json(node_tree, json_data):
+def import_node_tree_from_json(node_tree, json_data, context):
     data = json.loads(json_data)
 
     if "main_tree" not in data:
@@ -740,9 +741,9 @@ def import_node_tree_from_json(node_tree, json_data):
             groups_map[grp_name] = bpy.data.node_groups.new(grp_name, grp_type)
 
     for grp_name, grp_data in data.get("node_groups", {}).items():
-        _import_single_tree(groups_map[grp_name], grp_data, groups_map)
+        _import_single_tree(groups_map[grp_name], grp_data, groups_map, context)
 
-    _import_single_tree(node_tree, data["main_tree"], groups_map)
+    _import_single_tree(node_tree, data["main_tree"], groups_map, context)
 
 
 # ---------------------------------------------------------------------------
@@ -788,7 +789,7 @@ class NODECODE_OT_export_pretty(bpy.types.Operator):
 
 class NODECODE_OT_export_file(bpy.types.Operator, ExportHelper):
     bl_idname = "nodecode.export_file"
-    bl_label = "Compact File"
+    bl_label = "Compact"
     bl_description = "Export Nodes to File in compact format"
 
     filename_ext = ".txt"
@@ -814,7 +815,7 @@ class NODECODE_OT_export_file(bpy.types.Operator, ExportHelper):
 
 class NODECODE_OT_export_file_pretty(bpy.types.Operator, ExportHelper):
     bl_idname = "nodecode.export_file_pretty"
-    bl_label = "Readable File"
+    bl_label = "Readable"
     bl_description = "Export Nodes to File in human readable format"
 
     filename_ext = ".txt"
@@ -886,7 +887,7 @@ class NODECODE_OT_import_buffer(bpy.types.Operator):
                 self.report({"WARNING"}, err)
                 return {"CANCELLED"}
 
-        import_node_tree_from_json(tree, self._raw)
+        import_node_tree_from_json(tree, self._raw, context)
 
         self._raw = None
         self._data = None
@@ -955,7 +956,7 @@ class NODECODE_OT_import_file(bpy.types.Operator):
                 self.report({"WARNING"}, err)
                 return {"CANCELLED"}
 
-        import_node_tree_from_json(tree, raw)
+        import_node_tree_from_json(tree, raw, context)
 
         self.bypassVerCheck = False
 
@@ -982,21 +983,19 @@ class NODECODE_PT_panel(bpy.types.Panel):
 
         tree = (space.edit_tree or space.node_tree) if space else None
         if tree:
+            # ---------------------------------------------------------------
+            # NODE TREE INFO
+            # ---------------------------------------------------------------
             TREE_TYPE_LABELS = {
                 "ShaderNodeTree": ("Shader", "NODE_MATERIAL"),
                 "GeometryNodeTree": ("Geometry", "GEOMETRY_NODES"),
                 "CompositorNodeTree": ("Compositor", "NODE_COMPOSITING"),
                 "TextureNodeTree": ("Texture", "NODE_TEXTURE"),
             }
-            label = TREE_TYPE_LABELS.get(tree.bl_idname, tree.bl_idname)
-            layout.label(text=label[0], icon=label[1])  # pyright: ignore
 
             frames = sum(1 for n in tree.nodes if n.bl_idname == "NodeFrame")
             groups = sum(1 for n in tree.nodes if n.bl_idname in GROUP_NODE_TYPES)
-            regular = len(tree.nodes) - frames - groups
-
-            row = layout.row(align=True)
-            row.alignment = "EXPAND"
+            regular = len(tree.nodes) - frames
 
             items = [
                 ("Nodes", regular, "NODE"),
@@ -1005,6 +1004,38 @@ class NODECODE_PT_panel(bpy.types.Panel):
                 ("Groups", groups, "NODETREE"),
             ]
 
+            # ---------------------------------------------------------------
+            # INFO | STATS
+            # ---------------------------------------------------------------
+
+            box = layout.box()
+            col = box.column(align=True)
+            col.alignment = "LEFT"
+            row = col.row()
+            row.alignment = "CENTER"
+            row.label(text="Info", icon="INFO")
+
+            col.label(text="Versions:")
+            row = col.row()
+            row.alignment = "CENTER"
+            row.label(text=f"      Blender: {bpy.app.version_string}")
+            row.alignment = "CENTER"
+            row.label(text="|")
+            row.alignment = "LEFT"
+            row.label(text=("Addon: " + ".".join(map(str, bl_info["version"]))))
+
+            TREE_TYPE_LABELS = {
+                "ShaderNodeTree": ("Shader Editor", "NODE_MATERIAL"),
+                "GeometryNodeTree": ("Geometry Nodes", "GEOMETRY_NODES"),
+                "CompositorNodeTree": ("Compositor", "NODE_COMPOSITING"),
+                "TextureNodeTree": ("Texture Nodes", "NODE_TEXTURE"),
+            }
+            _label = TREE_TYPE_LABELS.get(tree.bl_idname, tree.bl_idname)
+            col.label()
+            col.label(text=_label[0], icon=_label[1])  # pyright: ignore
+            row = box.row(align=True)
+            row.alignment = "EXPAND"
+
             for label_text, value, ICON in items:
                 col = row.column(align=True)
                 col.alignment = "CENTER"
@@ -1012,36 +1043,58 @@ class NODECODE_PT_panel(bpy.types.Panel):
                 col.label(text=label_text, icon="NONE")
                 col.label(text=f"{value}", icon=ICON)
 
-            layout.separator()
+            # ---------------------------------------------------------------
+            # EXPORT
+            # ---------------------------------------------------------------
 
-            row = layout.row()
+            box = layout.box()
+            row = box.row()
             row.alignment = "CENTER"
-            row.label(text="Export Nodes To Code", icon="COPYDOWN")
+            row.label(text="Export", icon="EXPORT")
 
-            col = layout.column(align=True)
+            col = box.column(align=True)
+            col.alignment = "CENTER"
+
+            col.label(text="                           Clipboard")
             row = col.row(align=True)
-            row.operator("nodecode.export")
-            row.operator("nodecode.export_pretty")
+            row.operator("nodecode.export", icon="FULLSCREEN_EXIT")
+            row.operator("nodecode.export_pretty", icon="FILE_TEXT")
 
+            col.label(text="                            Text File")
             row = col.row(align=True)
-            row.operator("nodecode.export_file")
-            row.operator("nodecode.export_file_pretty")
+            row.operator("nodecode.export_file", icon="COPY_ID")
+            row.operator("nodecode.export_file_pretty", icon="TEXT")
 
-            row = layout.row()
+            # ---------------------------------------------------------------
+            # IMPORT
+            # ---------------------------------------------------------------
+
+            box = layout.box()
+            row = box.row()
             row.alignment = "CENTER"
-            row.label(text="Import Nodes From Code", icon="PASTEDOWN")
+            row.label(text="Import", icon="IMPORT")
 
-            row = layout.row(align=True)
-            row.operator("nodecode.import_buffer")
-            row.operator("nodecode.import_file")
+            row = box.row(align=True)
+            row.alignment = "EXPAND"
 
-            row = layout.row()
+            row.operator("nodecode.import_buffer", icon="PASTEDOWN")
+            row.operator("nodecode.import_file", icon="FILE_TICK")
+
+            # ---------------------------------------------------------------
+            # SETTINGS
+            # ---------------------------------------------------------------
+
+            box = layout.box()
+            row = box.row()
             row.alignment = "CENTER"
             row.label(text="Settings", icon="PROPERTIES")
 
-            row = layout.row(align=True).split(factor=(1 / 3))
+            row = box.row(align=True).split(factor=0.35)
             row.label(text="Compression")
             row.prop(scene, "compression", slider=True)
+
+            box.prop(scene, "EraseNodes", toggle=True)
+
         else:
             layout.label(text="No active node tree", icon="ERROR")
 
@@ -1065,6 +1118,7 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.compression = bpy.props.IntProperty(name="", min=0, max=9)
+    bpy.types.Scene.EraseNodes = bpy.props.BoolProperty(name="Erase Old Nodes")
 
 
 def unregister():
