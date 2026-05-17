@@ -1159,8 +1159,12 @@ classes = (
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.compression = bpy.props.IntProperty(name="", min=0, max=9)
-    bpy.types.Scene.EraseNodes = bpy.props.BoolProperty(name="Erase Old Nodes")
+    bpy.types.Scene.compression = bpy.props.IntProperty(
+        name="", min=0, max=9, default=6
+    )
+    bpy.types.Scene.EraseNodes = bpy.props.BoolProperty(
+        name="Erase Old Nodes", default=True
+    )
 
 
 def unregister():
