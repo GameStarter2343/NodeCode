@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 7, 0),
+    "version": (1, 7, 1),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -893,6 +893,7 @@ class NODECODE_OT_import_buffer(bpy.types.Operator):
         self._data = None
         self.bypassVerCheck = False
 
+        bpy.ops.ed.undo_push(message="NodeCode: undo import text")
         self.report({"INFO"}, "Node tree imported successfully")
         return {"FINISHED"}
 
@@ -960,6 +961,7 @@ class NODECODE_OT_import_file(bpy.types.Operator):
 
         self.bypassVerCheck = False
 
+        bpy.ops.ed.undo_push(message="NodeCode: undo import file")
         self.report({"INFO"}, "Node tree imported successfully")
         return {"FINISHED"}
 
