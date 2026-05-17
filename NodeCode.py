@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 6, 0),
+    "version": (1, 7, 0),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -577,7 +577,7 @@ def _collect_groups(node_tree, groups_out, visited):
             _collect_groups(grp, groups_out, visited)
 
 
-def export_node_tree_to_json(node_tree, compact=False):
+def export_node_tree_to_json(node_tree, compression, compact=False):
     groups = {}
     _collect_groups(node_tree, groups, set())
 
@@ -593,7 +593,7 @@ def export_node_tree_to_json(node_tree, compact=False):
 
     payload = json.dumps(result, separators=(",", ":")).encode("utf-8")
 
-    compressed = lzma.compress(payload, preset=9)
+    compressed = lzma.compress(payload, preset=compression)
 
     return base64.a85encode(compressed).decode("ascii")
 
@@ -761,7 +761,9 @@ class NODECODE_OT_export(bpy.types.Operator):
             self.report({"WARNING"}, err)
             return {"CANCELLED"}
 
-        context.window_manager.clipboard = export_node_tree_to_json(tree, True)
+        context.window_manager.clipboard = export_node_tree_to_json(
+            tree, context.scene.compression, True
+        )
         self.report({"INFO"}, "Node tree exported to clipboard")
         return {"FINISHED"}
 
@@ -777,7 +779,9 @@ class NODECODE_OT_export_pretty(bpy.types.Operator):
             self.report({"WARNING"}, err)
             return {"CANCELLED"}
 
-        context.window_manager.clipboard = export_node_tree_to_json(tree)
+        context.window_manager.clipboard = export_node_tree_to_json(
+            tree, context.scene.compression
+        )
         self.report({"INFO"}, "Node tree exported to clipboard")
         return {"FINISHED"}
 
@@ -787,13 +791,15 @@ class NODECODE_OT_export_file(bpy.types.Operator, ExportHelper):
     bl_label = "Compact File"
     bl_description = "Export Nodes to File in compact format"
 
+    filename_ext = ".txt"
+
     def execute(self, context):
         tree, err = get_active_node_tree(context)
         if err:
             self.report({"WARNING"}, err)
             return {"CANCELLED"}
 
-        data = export_node_tree_to_json(tree)
+        data = export_node_tree_to_json(tree, context.scene.compression, True)
         try:
             with open(self.filepath, "w", encoding="utf-8") as f:
                 f.write(data)
@@ -811,13 +817,15 @@ class NODECODE_OT_export_file_pretty(bpy.types.Operator, ExportHelper):
     bl_label = "Readable File"
     bl_description = "Export Nodes to File in human readable format"
 
+    filename_ext = ".txt"
+
     def execute(self, context):
         tree, err = get_active_node_tree(context)
         if err:
             self.report({"WARNING"}, err)
             return {"CANCELLED"}
 
-        data = export_node_tree_to_json(tree, True)
+        data = export_node_tree_to_json(tree, context.scene.compression)
         try:
             with open(self.filepath, "w", encoding="utf-8") as f:
                 f.write(data)
@@ -970,6 +978,7 @@ class NODECODE_PT_panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         space = context.space_data
+        scene = context.scene
 
         tree = (space.edit_tree or space.node_tree) if space else None
         if tree:
@@ -1020,12 +1029,19 @@ class NODECODE_PT_panel(bpy.types.Panel):
 
             row = layout.row()
             row.alignment = "CENTER"
-            row.label(text="Import Nodes To Code", icon="PASTEDOWN")
+            row.label(text="Import Nodes From Code", icon="PASTEDOWN")
 
             row = layout.row(align=True)
             row.operator("nodecode.import_buffer")
             row.operator("nodecode.import_file")
 
+            row = layout.row()
+            row.alignment = "CENTER"
+            row.label(text="Settings", icon="PROPERTIES")
+
+            row = layout.row(align=True).split(factor=(1 / 3))
+            row.label(text="Compression")
+            row.prop(scene, "compression", slider=True)
         else:
             layout.label(text="No active node tree", icon="ERROR")
 
@@ -1048,6 +1064,7 @@ classes = (
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
+    bpy.types.Scene.compression = bpy.props.IntProperty(name="", min=0, max=9)
 
 
 def unregister():
