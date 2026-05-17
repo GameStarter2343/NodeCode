@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 5, 5),
+    "version": (1, 6, 0),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -17,6 +17,8 @@ import lzma
 
 import bpy  # pyright: ignore
 import mathutils  # pyright: ignore
+from bpy.props import StringProperty  # pyright: ignore
+from bpy_extras.io_utils import ExportHelper  # pyright: ignore
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -780,6 +782,54 @@ class NODECODE_OT_export_pretty(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class NODECODE_OT_export_file(bpy.types.Operator, ExportHelper):
+    bl_idname = "nodecode.export_file"
+    bl_label = "Compact File"
+    bl_description = "Export Nodes to File in compact format"
+
+    def execute(self, context):
+        tree, err = get_active_node_tree(context)
+        if err:
+            self.report({"WARNING"}, err)
+            return {"CANCELLED"}
+
+        data = export_node_tree_to_json(tree)
+        try:
+            with open(self.filepath, "w", encoding="utf-8") as f:
+                f.write(data)
+
+        except Exception as e:
+            self.report({"ERROR"}, f"Failed to save file: {e}")
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, f"Node tree exported to {self.filepath}")
+        return {"FINISHED"}
+
+
+class NODECODE_OT_export_file_pretty(bpy.types.Operator, ExportHelper):
+    bl_idname = "nodecode.export_file_pretty"
+    bl_label = "Readable File"
+    bl_description = "Export Nodes to File in human readable format"
+
+    def execute(self, context):
+        tree, err = get_active_node_tree(context)
+        if err:
+            self.report({"WARNING"}, err)
+            return {"CANCELLED"}
+
+        data = export_node_tree_to_json(tree, True)
+        try:
+            with open(self.filepath, "w", encoding="utf-8") as f:
+                f.write(data)
+
+        except Exception as e:
+            self.report({"ERROR"}, f"Failed to save file: {e}")
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, f"Node tree exported to {self.filepath}")
+        return {"FINISHED"}
+
+
 class NODECODE_OT_import_buffer(bpy.types.Operator):
     bl_idname = "nodecode.import_buffer"
     bl_label = "Clipboard"
@@ -959,9 +1009,14 @@ class NODECODE_PT_panel(bpy.types.Panel):
             row.alignment = "CENTER"
             row.label(text="Export Nodes To Code", icon="COPYDOWN")
 
-            row = layout.row(align=True)
+            col = layout.column(align=True)
+            row = col.row(align=True)
             row.operator("nodecode.export")
             row.operator("nodecode.export_pretty")
+
+            row = col.row(align=True)
+            row.operator("nodecode.export_file")
+            row.operator("nodecode.export_file_pretty")
 
             row = layout.row()
             row.alignment = "CENTER"
@@ -982,6 +1037,8 @@ class NODECODE_PT_panel(bpy.types.Panel):
 classes = (
     NODECODE_OT_export,
     NODECODE_OT_export_pretty,
+    NODECODE_OT_export_file,
+    NODECODE_OT_export_file_pretty,
     NODECODE_OT_import_buffer,
     NODECODE_OT_import_file,
     NODECODE_PT_panel,
