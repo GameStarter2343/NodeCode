@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 7, 2),
+    "version": (1, 7, 3),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -1116,6 +1116,26 @@ class NODECODE_PT_panel(bpy.types.Panel):
             row.alignment = "CENTER"
             row.label(text="Import", icon="IMPORT")
 
+            box.label(text="Clipboard data:")
+            row = box.row(align=True).split(factor=0.295)
+            row.label()
+            col = row.column(align=True)
+            try:
+                raw, data = _decode_json(context.window_manager.clipboard.strip())
+            except Exception:
+                col.label(text="Correct JSON ✗")
+            else:
+                col.label(text="Correct JSON ✓")
+                addon_version = data.get("version", (0, 0, 0))
+
+                current_ver = ".".join(map(str, bl_info["version"]))
+                imported_ver = ".".join(map(str, addon_version))
+
+                col.label(
+                    text="Version: " + imported_ver + " ✓"
+                    if current_ver == imported_ver
+                    else " ✗"
+                )
             row = box.row(align=True)
             row.alignment = "EXPAND"
 
