@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 7, 1),
+    "version": (1, 7, 2),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -986,8 +986,33 @@ class NODECODE_PT_panel(bpy.types.Panel):
         tree = (space.edit_tree or space.node_tree) if space else None
         if tree:
             # ---------------------------------------------------------------
+            # JSON INFO
+            # ---------------------------------------------------------------
+
+            node_tree, err = get_active_node_tree(context)
+            if err:
+                self.report({"WARNING"}, err)
+                tree = None
+
+            groups = {}
+            _collect_groups(node_tree, groups, set())
+
+            result = {
+                "version": bl_info["version"],
+                "tree_type": node_tree.bl_idname,  # pyright: ignore
+                "main_tree": _export_single_tree(node_tree),
+                "node_groups": groups,
+            }
+
+            payload = json.dumps(result, separators=(",", ":")).encode("utf-8")
+            compressed = base64.a85encode(
+                lzma.compress(payload, preset=context.scene.compression)
+            ).decode("ascii")
+
+            # ---------------------------------------------------------------
             # NODE TREE INFO
             # ---------------------------------------------------------------
+
             TREE_TYPE_LABELS = {
                 "ShaderNodeTree": ("Shader", "NODE_MATERIAL"),
                 "GeometryNodeTree": ("Geometry", "GEOMETRY_NODES"),
@@ -995,13 +1020,13 @@ class NODECODE_PT_panel(bpy.types.Panel):
                 "TextureNodeTree": ("Texture", "NODE_TEXTURE"),
             }
 
-            frames = sum(1 for n in tree.nodes if n.bl_idname == "NodeFrame")
-            groups = sum(1 for n in tree.nodes if n.bl_idname in GROUP_NODE_TYPES)
-            regular = len(tree.nodes) - frames
+            frames = sum(1 for n in tree.nodes if n.bl_idname == "NodeFrame")  # pyright: ignore
+            groups = sum(1 for n in tree.nodes if n.bl_idname in GROUP_NODE_TYPES)  # pyright: ignore
+            regular = len(tree.nodes) - frames  # pyright: ignore
 
             items = [
                 ("Nodes", regular, "NODE"),
-                ("Links", len(tree.links), "LINKED"),
+                ("Links", len(tree.links), "LINKED"),  # pyright: ignore
                 ("Frames", frames, "OBJECT_DATA"),
                 ("Groups", groups, "NODETREE"),
             ]
@@ -1032,7 +1057,7 @@ class NODECODE_PT_panel(bpy.types.Panel):
                 "CompositorNodeTree": ("Compositor", "NODE_COMPOSITING"),
                 "TextureNodeTree": ("Texture Nodes", "NODE_TEXTURE"),
             }
-            _label = TREE_TYPE_LABELS.get(tree.bl_idname, tree.bl_idname)
+            _label = TREE_TYPE_LABELS.get(tree.bl_idname, tree.bl_idname)  # pyright: ignore
             col.label()
             col.label(text=_label[0], icon=_label[1])  # pyright: ignore
             row = box.row(align=True)
@@ -1053,6 +1078,16 @@ class NODECODE_PT_panel(bpy.types.Panel):
             row = box.row()
             row.alignment = "CENTER"
             row.label(text="Export", icon="EXPORT")
+
+            box.label(text="Estimated file:")
+            col = box.column(align=True)
+            col.alignment = "CENTER"
+
+            col.label(text=f"raw JSON: {len(payload) / 1000:.1f}k symbols")
+            col.label(text=f"compact: {len(compressed) / 1000:.1f}k symbols")
+            col.label(
+                text=f"compression ratio: {round((1 - 1 / (len(payload) / len(compressed))) * 100)}%"
+            )
 
             col = box.column(align=True)
             col.alignment = "CENTER"
