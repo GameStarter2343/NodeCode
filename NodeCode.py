@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 7, 4),
+    "version": (1, 8, 0),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -295,14 +295,17 @@ def _apply_color_ramp(node, cr_data):
 # ---------------------------------------------------------------------------
 
 
-def _export_sockets_sparse(sockets, connected_indices=None):
-    """Export only sockets with non-default state, keyed by index string.
+def _socket_default(sock):
+    try:
+        prop = sock.bl_rna.properties.get("default_value")
+        if prop:
+            return _get_prop_default(prop)
+    except Exception:
+        pass
+    return None
 
-    ``connected_indices`` is a set of input socket indices whose default_value
-    can be skipped because a link will overwrite them at render time.
 
-    Returns None (omitted from JSON) when every socket is at its default.
-    """
+def _export_sockets_sparse(sockets, connected_indices=None, include_default_value=True):
     result = {}
     for i, sock in enumerate(sockets):
         entry = {}
@@ -316,13 +319,17 @@ def _export_sockets_sparse(sockets, connected_indices=None):
             if val != default:
                 entry[key] = val
 
-        if hasattr(sock, "default_value") and (
-            connected_indices is None or i not in connected_indices
-        ):
-            try:
-                entry["dv"] = _serialize_value(sock.default_value)
-            except Exception:
-                pass
+        if include_default_value and hasattr(sock, "default_value"):
+            if connected_indices is None or i not in connected_indices:
+                try:
+                    current = _serialize_value(sock.default_value)
+                    default = _socket_default(sock)
+                    if default is None or _normalize_compare(
+                        current
+                    ) != _normalize_compare(default):
+                        entry["dv"] = current
+                except Exception:
+                    pass
 
         if entry:
             result[str(i)] = entry
@@ -482,7 +489,7 @@ def ensure_import_node_tree(context, tree_type_hint):
 # ---------------------------------------------------------------------------
 
 
-def _export_single_tree(node_tree):
+def _export_single_tree(node_tree, keepNames=False):
     data = {"nodes": [], "links": []}
     node_index = {node: i for i, node in enumerate(node_tree.nodes)}
 
@@ -499,12 +506,20 @@ def _export_single_tree(node_tree):
     for node in node_tree.nodes:
         ci = connected_inputs.get(id(node))
 
-        node_data = {
-            "id": node_index[node],
-            "name": node.name,
-            "type": node.bl_idname,
-            "location": [round(node.location.x, 2), round(node.location.y, 2)],
-        }
+        node_data = (
+            {
+                "i": node_index[node],
+                "n": node.name,
+                "t": node.bl_idname,
+                "l": [round(node.location.x, 1), round(node.location.y, 1)],
+            }
+            if keepNames
+            else {
+                "i": node_index[node],
+                "t": node.bl_idname,
+                "l": [round(node.location.x, 1), round(node.location.y, 1)],
+            }
+        )
 
         if node.label:
             node_data["label"] = node.label
@@ -519,11 +534,13 @@ def _export_single_tree(node_tree):
         if node.parent:
             node_data["parent"] = node_index[node.parent]
 
-        inputs = _export_sockets_sparse(node.inputs, connected_indices=ci)
+        inputs = _export_sockets_sparse(
+            node.inputs, connected_indices=ci, include_default_value=True
+        )
+        outputs = _export_sockets_sparse(node.outputs, include_default_value=False)
+
         if inputs:
             node_data["inputs"] = inputs
-
-        outputs = _export_sockets_sparse(node.outputs)
         if outputs:
             node_data["outputs"] = outputs
 
@@ -619,11 +636,10 @@ def _import_single_tree(node_tree, tree_data, groups_map, context):
 
     for nd in tree_data.get("nodes", []):
         try:
-            node = node_tree.nodes.new(nd["type"])
+            node = node_tree.nodes.new(nd["t"])
         except RuntimeError:
             continue
-
-        node.name = nd.get("name", node.name)
+        node.name = nd.get("n", node.name)
         node.width = nd.get("width", 140.0)
         node.hide = nd.get("hide", False)
         node.mute = nd.get("mute", False)
@@ -672,7 +688,7 @@ def _import_single_tree(node_tree, tree_data, groups_map, context):
         _apply_sockets_any(node.inputs, nd.get("inputs"))
         _apply_sockets_any(node.outputs, nd.get("outputs"))
 
-        node_id = nd.get("id")
+        node_id = nd.get("i")
         if node_id is not None:
             created[node_id] = node
 
@@ -682,7 +698,7 @@ def _import_single_tree(node_tree, tree_data, groups_map, context):
         if not parent_id:
             continue
 
-        node = created.get(nd.get("id"))
+        node = created.get(nd.get("i"))
         parent = created.get(parent_id)
 
         if node and parent:
@@ -695,11 +711,11 @@ def _import_single_tree(node_tree, tree_data, groups_map, context):
     # Blender recalculates child coordinates when parent is set,
     # including nested NodeFrame hierarchies.
     for nd in tree_data.get("nodes", []):
-        node = created.get(nd.get("id"))
+        node = created.get(nd.get("i"))
 
         if node:
             try:
-                node.location = nd.get("location", [0, 0])
+                node.location = nd.get("l", [0, 0])
             except Exception:
                 pass
 
