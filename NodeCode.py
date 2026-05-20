@@ -489,7 +489,7 @@ def ensure_import_node_tree(context, tree_type_hint):
 # ---------------------------------------------------------------------------
 
 
-def _export_single_tree(node_tree, keepNames=False):
+def _export_single_tree(node_tree):
     data = {"nodes": [], "links": []}
     node_index = {node: i for i, node in enumerate(node_tree.nodes)}
 
@@ -506,20 +506,11 @@ def _export_single_tree(node_tree, keepNames=False):
     for node in node_tree.nodes:
         ci = connected_inputs.get(id(node))
 
-        node_data = (
-            {
-                "i": node_index[node],
-                "n": node.name,
-                "t": node.bl_idname,
-                "l": [round(node.location.x, 1), round(node.location.y, 1)],
-            }
-            if keepNames
-            else {
-                "i": node_index[node],
-                "t": node.bl_idname,
-                "l": [round(node.location.x, 1), round(node.location.y, 1)],
-            }
-        )
+        node_data = {
+            "i": node_index[node],
+            "t": node.bl_idname,
+            "l": [round(node.location.x, 1), round(node.location.y, 1)],
+        }
 
         if node.label:
             node_data["label"] = node.label
