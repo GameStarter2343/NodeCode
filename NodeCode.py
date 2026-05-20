@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 8, 0),
+    "version": (1, 8, 1),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -695,7 +695,7 @@ def _import_single_tree(node_tree, tree_data, groups_map, context):
     # Assign parenting first
     for nd in tree_data.get("nodes", []):
         parent_id = nd.get("parent")
-        if not parent_id:
+        if parent_id is None:
             continue
 
         node = created.get(nd.get("i"))
