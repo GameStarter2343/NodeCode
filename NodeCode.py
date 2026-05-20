@@ -4,7 +4,7 @@
 bl_info = {
     "name": "NodeCode Converter",
     "author": "GameStarter2343",
-    "version": (1, 7, 3),
+    "version": (1, 7, 4),
     "blender": (2, 93, 0),
     "location": "Node Editor > SideBar > NodeCode",
     "description": "A tool designed to export/import complex node groups with ease",
@@ -548,6 +548,15 @@ def _export_single_tree(node_tree):
                 node_data["node_group_name"] = grp.name
 
         rna = _serialize_rna_diff(node, skip=_NODE_EXPLICIT_PROPS)
+        for _key in ("data_type", "operation", "mode", "blend_type"):
+            if hasattr(node, _key):
+                try:
+                    _v = getattr(node, _key)
+                    if isinstance(_v, str):
+                        rna[_key] = _v
+                except Exception:
+                    pass
+
         if rna:
             node_data["rna"] = rna
 
@@ -645,9 +654,16 @@ def _import_single_tree(node_tree, tree_data, groups_map, context):
             except Exception:
                 pass
 
+        rna_props = nd.get("rna", {})
+        if "data_type" in rna_props and hasattr(node, "data_type"):
+            try:
+                setattr(node, "data_type", rna_props["data_type"])
+            except Exception:
+                pass
+
         _apply_rna_properties(
             node,
-            nd.get("rna", {}),
+            rna_props,
             skip=_NODE_EXPLICIT_PROPS,
         )
 
