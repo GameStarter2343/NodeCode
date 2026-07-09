@@ -1,5 +1,4 @@
-# Copyright 2026 GameStarter2343
-# Licensed under the Apache License 2.0
+# Licensed under the General Public License 3.0
 
 import base64
 import json

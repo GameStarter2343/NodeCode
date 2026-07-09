@@ -68,5 +68,5 @@ The add-on serializes:
 
 ## License
 
-This project is licensed under the Apache License 2.0.
+This project is licensed under the General Public License 3.0.
 See the [LICENSE](./LICENSE) file for details.
