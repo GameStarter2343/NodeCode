@@ -1,0 +1,16 @@
+schema_version = "1.0.0"
+
+id = "nodecode_converter"
+version = "1.8.1"
+name = "NodeCode Converter"
+tagline = "A tool designed to export/import complex node groups with ease"
+maintainer = "GameStarter2343"
+type = "add-on"
+license = ["Apache 2.0"]
+
+blender_version_min = "5.1.0"
+
+tags = ["Node"]
+
+[tool.blender]
+location = "Node Editor > SideBar > NodeCode"
