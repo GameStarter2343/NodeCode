@@ -4,10 +4,13 @@ import base64
 import json
 import lzma
 import os
+import re
 
 import bpy  # pyright: ignore
 import mathutils  # pyright: ignore
 import tomllib
+import requests
+
 from bpy.props import StringProperty  # pyright: ignore
 from bpy_extras.io_utils import ExportHelper  # pyright: ignore
 
@@ -626,7 +629,7 @@ def export_node_tree_to_json(node_tree, compression, compact=False):
 
 
 def _import_single_tree(node_tree, tree_data, groups_map, context):
-    if context.scene.EraseNodes:
+    if context.scene.eraseNodes:
         node_tree.nodes.clear()
     created = {}
 
@@ -796,7 +799,6 @@ class NODECODE_OT_export(bpy.types.Operator):
         self.report({"INFO"}, "Node tree exported to clipboard")
         return {"FINISHED"}
 
-
 class NODECODE_OT_export_pretty(bpy.types.Operator):
     bl_idname = "nodecode.export_pretty"
     bl_label = "Readable"
@@ -814,6 +816,44 @@ class NODECODE_OT_export_pretty(bpy.types.Operator):
         self.report({"INFO"}, "Node tree exported to clipboard")
         return {"FINISHED"}
 
+class NODECODE_OT_export_pastebin(bpy.types.Operator):
+    bl_idname = "nodecode.export_pastebin"
+    bl_label = "Pastebin"
+    bl_description = "Export nodes to pastebin and copy link to clipboard"
+
+    def execute(self, context):
+        tree, err = get_active_node_tree(context)
+        if err:
+            self.report({"WARNING"}, err)
+            return {"CANCELLED"}
+
+        wm = context.window_manager
+        payload = export_node_tree_to_json(
+            tree, context.scene.compression, True
+        )
+        
+        data = {
+            'api_dev_key': context.scene.pastebinAPI.strip(),
+            'api_option': 'paste',
+            'api_paste_code': payload,
+            'api_paste_expire_date': 'N'
+        }
+        
+        try:
+            response = requests.post("https://pastebin.com/api/api_post.php", data=data)
+            
+            if "Bad API request" in response.text:
+                self.report({"WARNING"}, response.text)
+                return {"CANCELLED"}
+            
+            wm.clipboard = response.text
+            
+        except Exception as e:
+            self.report({"WARNING"}, f"Failed to upload to pastebin: {e}")
+            return {"CANCELLED"}
+        
+        self.report({"INFO"}, "Node tree exported to pastebin, link copied to clipboard")
+        return {"FINISHED"}
 
 class NODECODE_OT_export_file(bpy.types.Operator, ExportHelper):
     bl_idname = "nodecode.export_file"
@@ -840,7 +880,6 @@ class NODECODE_OT_export_file(bpy.types.Operator, ExportHelper):
         self.report({"INFO"}, f"Node tree exported to {self.filepath}")
         return {"FINISHED"}
 
-
 class NODECODE_OT_export_file_pretty(bpy.types.Operator, ExportHelper):
     bl_idname = "nodecode.export_file_pretty"
     bl_label = "Readable"
@@ -865,7 +904,6 @@ class NODECODE_OT_export_file_pretty(bpy.types.Operator, ExportHelper):
 
         self.report({"INFO"}, f"Node tree exported to {self.filepath}")
         return {"FINISHED"}
-
 
 class NODECODE_OT_import_buffer(bpy.types.Operator):
     bl_idname = "nodecode.import_buffer"
@@ -924,7 +962,6 @@ class NODECODE_OT_import_buffer(bpy.types.Operator):
         bpy.ops.ed.undo_push(message="NodeCode: undo import text")
         self.report({"INFO"}, "Node tree imported successfully")
         return {"FINISHED"}
-
 
 class NODECODE_OT_import_file(bpy.types.Operator):
     bl_idname = "nodecode.import_file"
@@ -993,6 +1030,86 @@ class NODECODE_OT_import_file(bpy.types.Operator):
         self.report({"INFO"}, "Node tree imported successfully")
         return {"FINISHED"}
 
+class NODECODE_OT_import_pastebin(bpy.types.Operator):
+    bl_idname = "nodecode.import_pastebin"
+    bl_label = "pastebin"
+    bl_description = "Import Nodes from Pastebin url (https://pastebin.com/<id>)"
+
+    def execute(self, context):
+            clipboard_text = context.window_manager.clipboard.strip()
+
+            match = re.search(r"pastebin\.com/(?:raw/)?([a-zA-Z0-9]+)", clipboard_text)
+            if not match:
+                self.report(
+                    {"ERROR"}, "Clipboard does not contain a valid Pastebin URL"
+                )
+                return {"CANCELLED"}
+
+            paste_id = match.group(1)
+            raw_url = f"https://pastebin.com/raw/{paste_id}"
+
+            try:
+                response = requests.get(raw_url, timeout=5)
+                response.raise_for_status()
+                payload = response.text
+                raw, data = _decode_json(payload.strip())
+
+                tree_type_hint = data.get("tree_type", "ShaderNodeTree")
+                
+                tree, err = get_active_node_tree(context)
+            
+                if err:
+                    tree, err = ensure_import_node_tree(context, tree_type_hint)
+            
+                    if err:
+                        self.report({"WARNING"}, err)
+                        return {"CANCELLED"}
+            
+                import_node_tree_from_json(tree, raw, context)
+            
+                bpy.ops.ed.undo_push(message="NodeCode: undo import file")
+                self.report({"INFO"}, "Node tree imported successfully")
+
+                return {"FINISHED"}
+
+            except requests.exceptions.HTTPError as e:
+                self.report({"ERROR"}, f"Failed to fetch content. HTTP Status: {e.response.status_code}")
+                return {"CANCELLED"}
+
+            except requests.exceptions.RequestException as e:
+                self.report({"ERROR"}, f"Network error: {str(e)}")
+                return {"CANCELLED"}
+
+            except Exception as e:
+                self.report({"ERROR"}, f"Unexpected error: {str(e)}")
+                return {"CANCELLED"}
+
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+class NODECODE_OT_check_pastebin(bpy.types.Operator):
+    bl_idname = "nodecode.check_pastebin"
+    bl_label = "Check Pastebin"
+    bl_description = "Create test paste on pastebin to check if API key works"
+    def execute(self, context):
+        data = {
+            'api_dev_key': context.scene.pastebinAPI.strip(),
+            'api_option': 'paste',
+            'api_paste_code': "API Validation Test",
+            'api_paste_expire_date': '10M'
+        }
+        try:
+            response = requests.post("https://pastebin.com/api/api_post.php", data=data)
+            if "Bad API request" in response.text: 
+                context.scene.api_key_valid = False
+                print(response.text, "api key:", context.scene.pastebinAPI.strip())
+            else: 
+                context.scene.api_key_valid = True
+        except requests.RequestException:
+            context.scene.api_key_valid = False
+        return {"FINISHED"}
 
 # ---------------------------------------------------------------------------
 # UI panel
@@ -1128,7 +1245,7 @@ class NODECODE_PT_panel(bpy.types.Panel):
             col.label(text="                           Clipboard")
             row = col.row(align=True)
             row.operator("nodecode.export", icon="FULLSCREEN_EXIT")
-            row.operator("nodecode.export_pretty", icon="FILE_TEXT")
+            row.operator("nodecode.export_pastebin", icon="FILE_TEXT")
 
             col.label(text="                            Text File")
             row = col.row(align=True)
@@ -1162,13 +1279,13 @@ class NODECODE_PT_panel(bpy.types.Panel):
                 col.label(
                     text="Version: " + imported_ver + " ✓"
                     if current_ver == imported_ver
-                    else " ✗"
+                    else "Version: " + imported_ver + " ✗"
                 )
             row = box.row(align=True)
             row.alignment = "EXPAND"
 
             row.operator("nodecode.import_buffer", icon="PASTEDOWN")
-            row.operator("nodecode.import_file", icon="FILE_TICK")
+            row.operator("nodecode.import_pastebin", icon="FILE_TICK")
 
             # ---------------------------------------------------------------
             # SETTINGS
@@ -1179,11 +1296,18 @@ class NODECODE_PT_panel(bpy.types.Panel):
             row.alignment = "CENTER"
             row.label(text="Settings", icon="TOOL_SETTINGS")
 
-            row = box.row(align=True).split(factor=0.35)
+            row = box.row(align=True).split(factor=0.5)
             row.label(text="Compression")
             row.prop(scene, "compression", slider=True)
 
-            box.prop(scene, "EraseNodes", toggle=True)
+            box.prop(scene, "eraseNodes", toggle=True)
+
+            row = box.row(align=True).split(factor=0.5)
+            row.alignment = "CENTER"
+            row.alert = not scene.api_key_valid
+            row.label(text="Pastebin API", icon = 'CHECKMARK' if scene.api_key_valid else 'ERROR')
+            row.prop(scene, "pastebinAPI")
+            box.operator("nodecode.check_pastebin", icon="FILE_TEXT")
 
         else:
             layout.label(text="No active node tree", icon="ERROR")
@@ -1196,10 +1320,13 @@ class NODECODE_PT_panel(bpy.types.Panel):
 classes = (
     NODECODE_OT_export,
     NODECODE_OT_export_pretty,
+    NODECODE_OT_export_pastebin,
     NODECODE_OT_export_file,
     NODECODE_OT_export_file_pretty,
     NODECODE_OT_import_buffer,
     NODECODE_OT_import_file,
+    NODECODE_OT_import_pastebin,
+    NODECODE_OT_check_pastebin,
     NODECODE_PT_panel,
 )
 
@@ -1210,8 +1337,15 @@ def register():
     bpy.types.Scene.compression = bpy.props.IntProperty(
         name="", min=0, max=9, default=6
     )
-    bpy.types.Scene.EraseNodes = bpy.props.BoolProperty(
+    bpy.types.Scene.eraseNodes = bpy.props.BoolProperty(
         name="Erase Old Nodes", default=True
+    )
+    bpy.types.Scene.pastebinAPI = bpy.props.StringProperty(
+        name="",
+        subtype='PASSWORD'
+    )
+    bpy.types.Scene.api_key_valid = bpy.props.BoolProperty(
+        name="Api key status"
     )
 
 
@@ -1219,6 +1353,9 @@ def unregister():
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 
+    del bpy.types.Scene.pastebinAPI
+    del bpy.types.Scene.api_key_valid
+    del bpy.types.Scene.eraseNodes
 
 if __name__ == "__main__":
     with open("blender_manifest.toml", "rb") as f:
