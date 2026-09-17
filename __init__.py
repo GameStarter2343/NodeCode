@@ -600,25 +600,44 @@ def _collect_groups(node_tree, groups_out, visited):
             _collect_groups(grp, groups_out, visited)
 
 
-def export_node_tree_to_json(node_tree, compression, compact=False):
+def export_node_tree_to_json(node_tree, context):
     groups = {}
     _collect_groups(node_tree, groups, set())
 
-    result = {
+    data = {
         "version": version,
         "tree_type": node_tree.bl_idname,
         "main_tree": _export_single_tree(node_tree),
         "node_groups": groups,
     }
 
-    if not compact:
-        return json.dumps(result, separators=(",", ":"))
+    string = json.dumps(data, separators=(",", ":"))
 
-    payload = json.dumps(result, separators=(",", ":")).encode("utf-8")
+    compressed = ""
 
-    compressed = lzma.compress(payload, preset=compression)
+    if not context.scene.compress:
+        compressed = string.encode('utf-8')
 
-    return base64.a85encode(compressed).decode("ascii")
+    match context.scene.compressAlg:
+        case 'LZMA':
+            compressed = compress.compress_lzma(string)
+
+        case 'ZSTD':
+            compressed = compress.compress_zstd(string)
+
+    encoded = ""
+
+    match context.scene.encodeAlg:
+        case '64':
+            encoded = base64.b64encode(compressed)
+
+        case '85':
+            encoded = base64.b85encode(compressed)
+
+    return encoded
+
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -627,8 +646,6 @@ def export_node_tree_to_json(node_tree, compression, compact=False):
 
 
 def _import_single_tree(node_tree, tree_data, groups_map, context):
-    if context.scene.eraseNodes:
-        node_tree.nodes.clear()
     created = {}
 
     for nd in tree_data.get("nodes", []):
@@ -792,7 +809,7 @@ class NODECODE_OT_export(bpy.types.Operator):
             return {"CANCELLED"}
 
         context.window_manager.clipboard = export_node_tree_to_json(
-            tree, context.scene.compression, True
+            tree, context
         )
         self.report({"INFO"}, "Node tree exported to clipboard")
         return {"FINISHED"}
@@ -809,7 +826,7 @@ class NODECODE_OT_export_pretty(bpy.types.Operator):
             return {"CANCELLED"}
 
         context.window_manager.clipboard = export_node_tree_to_json(
-            tree, context.scene.compression
+            tree, context
         )
         self.report({"INFO"}, "Node tree exported to clipboard")
         return {"FINISHED"}
@@ -827,7 +844,7 @@ class NODECODE_OT_export_pastebin(bpy.types.Operator):
 
         wm = context.window_manager
         payload = export_node_tree_to_json(
-            tree, context.scene.compression, True
+            tree, context
         )
         
         data = {
@@ -866,7 +883,7 @@ class NODECODE_OT_export_file(bpy.types.Operator, ExportHelper):
             self.report({"WARNING"}, err)
             return {"CANCELLED"}
 
-        data = export_node_tree_to_json(tree, context.scene.compression, True)
+        data = export_node_tree_to_json(tree, context)
         try:
             with open(self.filepath, "w", encoding="utf-8") as f:
                 f.write(data)
@@ -891,7 +908,7 @@ class NODECODE_OT_export_file_pretty(bpy.types.Operator, ExportHelper):
             self.report({"WARNING"}, err)
             return {"CANCELLED"}
 
-        data = export_node_tree_to_json(tree, context.scene.compression)
+        data = export_node_tree_to_json(tree, context)
         try:
             with open(self.filepath, "w", encoding="utf-8") as f:
                 f.write(data)
@@ -1112,212 +1129,12 @@ class NODECODE_OT_check_pastebin(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 # UI panel
 # ---------------------------------------------------------------------------
-
-
-class NODECODE_PT_panel(bpy.types.Panel):
-    bl_label = "NodeCode Converter"
-    bl_idname = "NODECODE_PT_panel"
-    bl_space_type = "NODE_EDITOR"
-    bl_region_type = "UI"
-    bl_category = "NodeCode"
-
-    def draw(self, context):
-        layout = self.layout
-        space = context.space_data
-        scene = context.scene
-
-        tree = (space.edit_tree or space.node_tree) if space else None
-        if tree:
-            # ---------------------------------------------------------------
-            # JSON INFO
-            # ---------------------------------------------------------------
-
-            node_tree, err = get_active_node_tree(context)
-            if err:
-                self.report({"WARNING"}, err)
-                tree = None
-
-            groups = {}
-            _collect_groups(node_tree, groups, set())
-
-            result = {
-                "version": version,
-                "tree_type": node_tree.bl_idname,  # pyright: ignore
-                "main_tree": _export_single_tree(node_tree),
-                "node_groups": groups,
-            }
-
-            payload = json.dumps(result, separators=(",", ":")).encode("utf-8")
-            compressed = base64.a85encode(
-                lzma.compress(payload, preset=6)
-            ).decode("ascii")
-
-            # ---------------------------------------------------------------
-            # NODE TREE INFO
-            # ---------------------------------------------------------------
-
-            TREE_TYPE_LABELS = {
-                "ShaderNodeTree": ("Shader", "NODE_MATERIAL"),
-                "GeometryNodeTree": ("Geometry", "GEOMETRY_NODES"),
-                "CompositorNodeTree": ("Compositor", "NODE_COMPOSITING"),
-                "TextureNodeTree": ("Texture", "NODE_TEXTURE"),
-            }
-
-            frames = sum(1 for n in tree.nodes if n.bl_idname == "NodeFrame")  # pyright: ignore
-            groups = sum(1 for n in tree.nodes if n.bl_idname in GROUP_NODE_TYPES)  # pyright: ignore
-            regular = len(tree.nodes) - frames  # pyright: ignore
-
-            items = [
-                ("Nodes", regular, "NODE"),
-                ("Links", len(tree.links), "LINKED"),  # pyright: ignore
-                ("Frames", frames, "OBJECT_DATA"),
-                ("Groups", groups, "NODETREE"),
-            ]
-
-            # ---------------------------------------------------------------
-            # INFO | STATS
-            # ---------------------------------------------------------------
-
-            box = layout.box()
-            col = box.column(align=True)
-            col.alignment = "LEFT"
-            row = col.row()
-            row.alignment = "CENTER"
-            row.label(text="Info", icon="INFO")
-
-            col.label(text="Versions:")
-            row = col.row()
-            row.alignment = "CENTER"
-            row.label(text=f"      Blender: {bpy.app.version_string}")
-            row.alignment = "CENTER"
-            row.label(text="|")
-            row.alignment = "LEFT"
-            row.label(text=("Addon: 1.8.1"))
-
-            TREE_TYPE_LABELS = {
-                "ShaderNodeTree": ("Shader Editor", "NODE_MATERIAL"),
-                "GeometryNodeTree": ("Geometry Nodes", "GEOMETRY_NODES"),
-                "CompositorNodeTree": ("Compositor", "NODE_COMPOSITING"),
-                "TextureNodeTree": ("Texture Nodes", "NODE_TEXTURE"),
-            }
-            _label = TREE_TYPE_LABELS.get(tree.bl_idname, tree.bl_idname)  # pyright: ignore
-            col.label()
-            col.label(text=_label[0], icon=_label[1])  # pyright: ignore
-            row = box.row(align=True)
-            row.alignment = "EXPAND"
-
-            for label_text, value, ICON in items:
-                col = row.column(align=True)
-                col.alignment = "CENTER"
-
-                col.label(text=label_text, icon="NONE")
-                col.label(text=f"{value}", icon=ICON)
-
-            # ---------------------------------------------------------------
-            # EXPORT
-            # ---------------------------------------------------------------
-
-            box = layout.box()
-            row = box.row()
-            row.alignment = "CENTER"
-            row.label(text="Export", icon="EXPORT")
-
-            box.label(text="Estimated file:")
-            row = box.row().split(factor=0.03)
-            row.label()
-            col = row.column(align=True)
-            col.alignment = "CENTER"
-
-            col.label(text=f"raw JSON: {len(payload)} symbols", icon="TEXT")
-            col.label(
-                text=f"compact: {len(compressed)} symbols", icon="FULLSCREEN_EXIT"
-            )
-            col.label(
-                text=f"compression ratio: {round((1 - 1 / (len(payload) / len(compressed))) * 100, 1)}%",
-                icon="MOD_LENGTH",
-            )
-
-            col = box.column(align=True)
-            col.alignment = "CENTER"
-
-            col.label(text="                           Clipboard")
-            row = col.row(align=True)
-            row.operator("nodecode.export", icon="FULLSCREEN_EXIT")
-            row.operator("nodecode.export_pastebin", icon="FILE_TEXT")
-
-            col.label(text="                            Text File")
-            row = col.row(align=True)
-            row.operator("nodecode.export_file", icon="COPY_ID")
-            row.operator("nodecode.export_file_pretty", icon="TEXT")
-
-            # ---------------------------------------------------------------
-            # IMPORT
-            # ---------------------------------------------------------------
-
-            box = layout.box()
-            row = box.row()
-            row.alignment = "CENTER"
-            row.label(text="Import", icon="IMPORT")
-
-            box.label(text="Clipboard data:")
-            row = box.row(align=True).split(factor=0.295)
-            row.label()
-            col = row.column(align=True)
-            try:
-                raw, data = _decode_json(context.window_manager.clipboard.strip())
-            except Exception:
-                col.label(text="Correct JSON ✗")
-            else:
-                col.label(text="Correct JSON ✓")
-                addon_version = data.get("version", (0, 0, 0))
-
-                current_ver = version
-                imported_ver = ".".join(map(str, addon_version))
-
-                col.label(
-                    text="Version: " + imported_ver + " ✓"
-                    if current_ver == imported_ver
-                    else "Version: " + imported_ver + " ✗"
-                )
-            row = box.row(align=True)
-            row.alignment = "EXPAND"
-
-            row.operator("nodecode.import_buffer", icon="PASTEDOWN")
-            row.operator("nodecode.import_pastebin", icon="FILE_TICK")
-
-            # ---------------------------------------------------------------
-            # SETTINGS
-            # ---------------------------------------------------------------
-
-#            box = layout.box()
-#            row = box.row()
-#            row.alignment = "CENTER"
-#            row.label(text="Settings", icon="TOOL_SETTINGS")
-#
-#            row = box.row(align=True).split(factor=0.5)
-#            row.alignment = "RIGHT"
-#            row.label(text="Compression")
-#            row.prop(scene, "compression", slider=True)
-#
-#            box.prop(scene, "eraseNodes", toggle=True)
-
-            row = box.row(align=True).split(factor=0.5)
-            row.alignment = "CENTER"
-            row.alert = not scene.api_key_valid
-            row.label(text="Pastebin API", icon = 'CHECKMARK' if scene.api_key_valid else 'ERROR')
-            row.prop(scene, "pastebinAPI")
-            box.operator("nodecode.check_pastebin", icon="FILE_TEXT")
-
-        else:
-            layout.label(text="No active node tree", icon="ERROR")
-
 class NODECODE_PT_main(bpy.types.Panel):
     bl_label = "NodeCode Converter"
     bl_idname = "NODECODE_PT_main"
     bl_space_type = "NODE_EDITOR"
     bl_region_type = "UI"
     bl_category = "NodeCode"
-    #bl_parent_id = "NODECODE_PT_panel"
 
     def draw(self, context):
         layout = self.layout
@@ -1480,29 +1297,31 @@ def register():
 
     scene.compressAlg = props.EnumProperty(
         name="Compressor", description="What compression algorithm to use for compressing JSON", items=[
-            ('CA1', 'LZMA', f"Use LZMA (Lempel-Ziv-Markov chain algorithm) for compressing JSON. \nCurrently the only one implemented")
+            ('LZMA', 'LZMA', f"Use LZMA (Lempel-Ziv-Markov chain algorithm) for compressing JSON."),
+            ('ZSTD', 'Zstd', f"Use Zstandard for compressing JSON.\nSupports custom pre-trained dictionary"),
         ]
     )
     scene.encodeAlg = props.EnumProperty( 
         name="Encoder", description="What encoding algorithm to use for turning data into text", items=[
-            ('EN1', 'Base85', f"Use Base85 for encoding JSON. \nAdds about 25% \nCurrently the only one implemented")
+            ('64', 'Base64', f"Use Base64 for encoding JSON. \nAdds about 33% but entirely safe for formatting"),
+            ('85', 'Base85', f"Use Base85 for encoding JSON. \nAdds about 25% but may conflict with formatting"),
         ]
     )
 
     scene.importMode = props.EnumProperty(
         name="Import Option", description="Select an option for importing a node tree", items=[
-            ('IM1', 'Replace', "Replace old node tree with imported one"),
-            ('IM2', 'Add', "Place nodes alongside old tree"),
-            ('IM3', 'New tree', "Create new material/geo/compositor node tree")
+            ('REP', 'Replace', "Replace old node tree with imported one"),
+            ('ADD', 'Add', "Place nodes alongside old tree"),
+            ('NEW', 'New tree', "Create new material/geo/compositor node tree")
         ]
     )
     scene.importReuseGroups = props.EnumProperty(
         name="Name Conflict", description="What should addon do to resolve name conflicts between imported and existing nodes", items=[
-            ('NCR1', 'Rename New', "Rename imported nodes that conflict with imported ones"),
-            ('NCR2', 'Rename Old', "Rename existing nodes that conflict with imported ones"),
-            ('NCR3', 'Delete', "Delete existing nodes that conflict with imported ones"),
-            ('NCR4', 'Use Groups', "Use existing node groups if their name matches imported group, rename standard nodes.\nThis mode can create conflicts or errors if you have a different node named just like imported one.\nIf material/geometry/compositor looks weird, try selecting other mode first"),
-        ], default='NCR4',
+            ('NEW', 'Rename New', "Rename imported nodes that conflict with imported ones"),
+            ('OLD', 'Rename Old', "Rename existing nodes that conflict with imported ones"),
+            ('DEL', 'Delete', "Delete existing nodes that conflict with imported ones"),
+            ('USE', 'Use Groups', "Use existing node groups if their name matches imported group, rename standard nodes.\nThis mode can create conflicts or errors if you have a different node named just like imported one.\nIf material/geometry/compositor looks weird, try selecting other mode first"),
+        ], default='USE',
     )
 
     bpy.types.Scene.pastebinAPI = bpy.props.StringProperty(
