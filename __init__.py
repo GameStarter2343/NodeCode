@@ -11,9 +11,9 @@ import mathutils  # pyright: ignore
 import tomllib
 import requests
 
-from bpy.props import StringProperty  # pyright: ignore
 from bpy_extras.io_utils import ExportHelper  # pyright: ignore
 
+from . import compress
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
