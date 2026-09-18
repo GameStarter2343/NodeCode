@@ -11,7 +11,7 @@ def compress_lzma(payload: bytes, preset: int=6):
 
 def decompress_lzma(payload: bytes):
     '''Compress payload string using LZMA'''
-    data = lzma.decompress(payload.encode('utf-8'))
+    data = lzma.decompress(payload)
     print(data)
     return data
 
@@ -27,15 +27,4 @@ def decompress_zstd(payload: bytes):
     with open("zstd.dict", "rb") as f:
         dict = zstd.ZstdCompressionDict(f.read())
     decompressor = zstd.ZstdDecompressor(dict_data=dict)
-    return decompressor.decompress(payload.encode('utf-8'))
-
-def identify(payload: bytes):
-    if payload.startswith(b'\xfd7zXZ\x00'):
-        return decompress_lzma(payload)
-
-    elif payload.startswith(b'\x28\xb5\x2f\xfd'):
-        return decompress_zstd(payload)
-    
-    else:
-        print("Compressor identifying error: incorrect payload")
-        return ""
+    return decompressor.decompress(payload)
