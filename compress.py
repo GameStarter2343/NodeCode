@@ -10,7 +10,7 @@ def compress_lzma(payload: bytes, preset: int=6):
     return data
 
 def decompress_lzma(payload: bytes):
-    '''Compress payload string using LZMA'''
+    '''Decompress payload string using LZMA'''
     data = lzma.decompress(payload)
     print(data)
     return data
