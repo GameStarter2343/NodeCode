@@ -1,6 +1,6 @@
 # Licensed under the General Public License 3.0
 
-import bpy
+import bpy # pyright: ignore
 import threading
 import queue
 import requests
