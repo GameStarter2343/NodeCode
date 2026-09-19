@@ -11,6 +11,7 @@ from bpy_extras.io_utils import ExportHelper  # pyright: ignore
 from . import compress
 from . import exporter
 from . import importer
+from . import network
 
 current_dir = os.path.dirname(__file__)
 manifest_path = os.path.join(current_dir, "blender_manifest.toml")
@@ -24,27 +25,6 @@ try:
 except Exception:
     pass
 
-class NODECODE_OT_check_pastebin(bpy.types.Operator):
-    bl_idname = "nodecode.check_pastebin"
-    bl_label = "Check Pastebin"
-    bl_description = "Create test paste on pastebin to check if API key works"
-    def execute(self, context):
-        data = {
-            'api_dev_key': context.scene.pastebinAPI.strip(),
-            'api_option': 'paste',
-            'api_paste_code': "API Validation Test",
-            'api_paste_expire_date': '10M'
-        }
-        try:
-            response = requests.post("https://pastebin.com/api/api_post.php", data=data)
-            if "Bad API request" in response.text: 
-                context.scene.api_key_valid = False
-                print(response.text, "api key:", context.scene.pastebinAPI.strip())
-            else: 
-                context.scene.api_key_valid = True
-        except requests.RequestException:
-            context.scene.api_key_valid = False
-        return {"FINISHED"}
 
 class NODECODE_PT_main(bpy.types.Panel):
     bl_label = "NodeCode Converter"
@@ -128,7 +108,6 @@ class NODECODE_PT_main(bpy.types.Panel):
 
         match scene.exportMode:
             case 'CLIP':
-                export_box.separator(factor=0)
                 export_box.prop(scene, "compress")
                 col = export_box.column(align=True)
                 col.enabled = scene.compress
@@ -141,8 +120,9 @@ class NODECODE_PT_main(bpy.types.Panel):
                 row.label(text="Work in progress")
             
             case 'LINK':
-                export_box.separator(factor=0)
-                export_box.prop(scene, "pastebinAPI")
+                row = export_box.row()
+                row.alert = not scene.api_key_valid
+                row.prop(scene, "pastebinAPI")
 
             case 'WIP': #wip
                 row=export_box.row()
@@ -164,7 +144,6 @@ class NODECODE_PT_main(bpy.types.Panel):
 classes = (
     exporter.NODECODE_OT_export,
     importer.NODECODE_OT_import,
-    NODECODE_OT_check_pastebin,
     NODECODE_PT_main,
 )
 
@@ -179,10 +158,10 @@ def register():
     scene.exportMode = props.EnumProperty(
         name="Export Option", description="Select an option for exporting node tree", items=[
             ('CLIP', 'Clipboard', f"Export nodes as a JSON and save result to clipboard. \nLeast compact of all options"),
-            ('FILE', 'File [WIP]', "Work in progress"),
+            #('FILE', 'File [WIP]', "Work in progress"),
             ('LINK', 'Link (Pastebin)', f"Export nodes as a JSON, create paste at Pastebin and save link to clipboard. \nProbably the best variant since it's fast, simple and pastebin allows paste to be available indefinitely long. \n\nPLEASE NOTE: You need to provide your developer api key in order to create pastes, on free accounts pastes are limited to 20 per day"),
-            ('WIP', 'Link (x0.at) [WIP]', "Work in progress"),
-        ], 
+            #('WIP', 'Link (x0.at) [WIP]', "Work in progress"),
+        ], default='LINK'
     )
 
     scene.compress = props.BoolProperty(
@@ -193,20 +172,20 @@ def register():
         name="Compressor", description="What compression algorithm to use for compressing JSON", items=[
             ('LZMA', 'LZMA', f"Use LZMA (Lempel-Ziv-Markov chain algorithm) for compressing JSON."),
             ('ZSTD', 'Zstd', f"Use Zstandard for compressing JSON.\nSupports custom pre-trained dictionary"),
-        ]
+        ], default='ZSTD'
     )
     scene.encodeAlg = props.EnumProperty( 
         name="Encoder", description="What encoding algorithm to use for turning data into text", items=[
             ('64', 'Base64', f"Use Base64 for encoding JSON. \nAdds about 33% but entirely safe for formatting"),
             ('85', 'Base85', f"Use Base85 for encoding JSON. \nAdds about 25% but may conflict with formatting"),
-        ]
+        ], default='85'
     )
 
     scene.importMode = props.EnumProperty(
         name="Import Option", description="Select an option for importing a node tree", items=[
             ('REP', 'Replace', "Replace old node tree with imported one"),
             ('ADD', 'Add', "Place nodes alongside old tree"),
-            ('NEW', 'New tree', "Create new material/geo/compositor node tree")
+            ('NEW', 'New tree', "Create new material/geo/compositor node tree.\n\nDoesn't work correctly in geo nodes")
         ]
     )
     scene.importReuseGroups = props.EnumProperty(
@@ -221,6 +200,7 @@ def register():
     bpy.types.Scene.pastebinAPI = bpy.props.StringProperty(
         name="Pastebin API key",
         description="Developer api key from your pastebin account.\nAPI key is required to create pastes",
+        update = network.check_pastebin,
         subtype='PASSWORD'
     )
     bpy.types.Scene.api_key_valid = bpy.props.BoolProperty(
@@ -231,6 +211,7 @@ def register():
         bpy.utils.register_class(cls)  
 
     compress.load_zstd_dict()
+    network.init()
 
 def unregister():
     scene = bpy.types.Scene

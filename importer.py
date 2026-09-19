@@ -9,6 +9,7 @@ import time
 
 from . import utils
 from . import compress
+from . import network
 
 def _decode_json(payload):
     if payload[0] == '{': return payload
@@ -440,8 +441,14 @@ class NODECODE_OT_import(bpy.types.Operator):
         return context.area and context.area.type == 'NODE_EDITOR'
     
     def execute(self, context):
-        raw = context.window_manager.clipboard.strip()
-        data = _decode_json(raw)
+        clip = context.window_manager.clipboard.strip()
+        if clip.startswith("https://pastebin.com/"):
+            if not clip.startswith("https://pastebin.com/raw/"):
+                clip.replace("pastebin.com/", "pastebin.com/raw/")
+            data = json.loads(network.get_pastebin(clip, context))
+
+        else: data = _decode_json(clip)
+
         tree_type_hint = data.get("tree_type", "ShaderNodeTree")
 
         tree, err = get_active_node_tree(context)
