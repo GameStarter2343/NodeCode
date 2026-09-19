@@ -273,10 +273,10 @@ def export_node_tree_to_json(node_tree, context):
 
     match context.scene.encodeAlg:
         case '64':
-            encoded = base64.b64encode(compressed)
+            encoded = f"64:{base64.b64encode(compressed).decode('utf-8')}"
 
         case '85':
-            encoded = base64.b85encode(compressed)
+            encoded = f"85:{base64.b85encode(compressed).decode('utf-8')}"
 
         case _:
             raise ValueError(f"Unsupported encoding algorithm: {context.scene.encodeAlg}")

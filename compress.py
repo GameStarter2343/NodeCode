@@ -3,28 +3,26 @@
 import lzma
 import zstandard as zstd
 
-def compress_lzma(payload: bytes, preset: int=6):
+zstd_dict = None
+
+def compress_lzma(payload: str, preset: int = 6) -> bytes:
     '''Compress payload string using LZMA'''
-    data = lzma.compress(payload.encode('utf-8'), preset=preset)
-    print(data)
-    return data
+    return lzma.compress(payload.encode('utf-8'), preset=preset)
+def decompress_lzma(payload: bytes) -> str:
+    '''Decompress LZMA bytes back into a string'''
+    return lzma.decompress(payload).decode('utf-8')
 
-def decompress_lzma(payload: bytes):
-    '''Decompress payload string using LZMA'''
-    data = lzma.decompress(payload)
-    print(data)
-    return data
+def load_zstd_dict(dict_path: str = "zstd.dict") -> zstd.ZstdCompressionDict:
+    with open(dict_path, "rb") as f:
+        global zstd_dict
+        zstd_dict = zstd.ZstdCompressionDict(f.read())
 
-def compress_zstd(payload: str, preset: int=19):
+def compress_zstd(payload: str, preset: int = 19) -> bytes:
     '''Compress payload string using Zstd'''
-    with open("zstd.dict", "rb") as f:
-        dict = zstd.ZstdCompressionDict(f.read())
-    compressor = zstd.ZstdCompressor(level=preset, dict_data=dict)
+    compressor = zstd.ZstdCompressor(level=preset, dict_data=zstd_dict)
     return compressor.compress(payload.encode('utf-8'))
 
-def decompress_zstd(payload: bytes):
-    '''Decompress payload string using Zstd'''
-    with open("zstd.dict", "rb") as f:
-        dict = zstd.ZstdCompressionDict(f.read())
-    decompressor = zstd.ZstdDecompressor(dict_data=dict)
-    return decompressor.decompress(payload)
+def decompress_zstd(payload: bytes) -> str:
+    '''Decompress Zstd bytes back into a string'''
+    decompressor = zstd.ZstdDecompressor(dict_data=zstd_dict)
+    return decompressor.decompress(payload).decode('utf-8')

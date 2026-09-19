@@ -11,26 +11,28 @@ from . import utils
 from . import compress
 
 def _decode_json(payload):
-    payload_bytes = payload.encode('utf-8') if isinstance(payload, str) else payload
-    decoded = None
-    
-    for decoder in (base64.b64decode, base64.b85decode):
-        try:
-            decoded = decoder(payload_bytes)
-            break
-        except Exception:
-            continue
+    if payload[0] == '{': return payload
+    prefix, data = payload.split(":", 1)
+    byte_data = data.encode('utf-8')
 
-    if decoded is None:
-        print("Error while decoding payload: All decoders failed.")
-        return None
+    decoded = None 
+
+    match prefix:
+        case '64':
+            decoded = base64.b64decode(byte_data)
+        case '85':
+            decoded = base64.b85decode(byte_data)
+        case _:
+            print("Error while decoding payload: All decoders failed.")
+            return None
 
     decompressed = None
     for decompressor in (compress.decompress_zstd, compress.decompress_lzma):
         try:
             decompressed = decompressor(decoded)
             break
-        except Exception:
+        except Exception as e:
+            print(decompressor, e)
             continue
 
     if decompressed is None:

@@ -230,6 +230,7 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)  
 
+    compress.load_zstd_dict()
 
 def unregister():
     scene = bpy.types.Scene
